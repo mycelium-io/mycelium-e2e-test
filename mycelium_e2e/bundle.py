@@ -10,13 +10,13 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
-import urllib.request
-import urllib.error
-import urllib.parse
 
 from mycelium_e2e.config import (
     BACKEND_URL,
@@ -48,41 +48,39 @@ _log_file_path: Optional[str] = None
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from text for clean log files."""
     import re
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 def _init_logger() -> logging.Logger:
     """Initialize the file logger for this test run."""
     global _logger, _log_file_path
-    
+
     if _logger is not None:
         return _logger
-    
+
     os.makedirs(LOG_DIR, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _log_file_path = os.path.join(LOG_DIR, f"e2e_run_{timestamp}.log")
-    
+
     _logger = logging.getLogger("mycelium_e2e")
     _logger.setLevel(logging.DEBUG)
     _logger.handlers.clear()
-    
+
     file_handler = logging.FileHandler(_log_file_path, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
-    
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
+
+    formatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     file_handler.setFormatter(formatter)
     _logger.addHandler(file_handler)
-    
+
     _logger.info("=" * 80)
-    _logger.info(f"Mycelium E2E Test Run Started")
+    _logger.info("Mycelium E2E Test Run Started")
     _logger.info(f"Log file: {_log_file_path}")
     _logger.info(f"Timestamp: {datetime.now().isoformat()}")
     _logger.info("=" * 80)
-    
+
     return _logger
 
 
@@ -90,14 +88,14 @@ def log(level: str, message: str, **kwargs):
     """Log a message to the file logger."""
     if not LOG_ENABLED:
         return
-    
+
     logger = _init_logger()
     clean_msg = _strip_ansi(message)
-    
+
     if kwargs:
         extra = " | " + " | ".join(f"{k}={v}" for k, v in kwargs.items())
         clean_msg += extra
-    
+
     getattr(logger, level.lower(), logger.info)(clean_msg)
 
 
@@ -125,8 +123,9 @@ def log_section(num: int, title: str):
     log_info("-" * 60)
 
 
-def log_check(name: str, passed: bool, error: Optional[str] = None, 
-              skipped: bool = False, skip_reason: Optional[str] = None):
+def log_check(
+    name: str, passed: bool, error: Optional[str] = None, skipped: bool = False, skip_reason: Optional[str] = None
+):
     """Log a check result."""
     if skipped:
         log_info(f"  [SKIP] {name} - {skip_reason}")
@@ -173,15 +172,15 @@ def log_convergence_result(consensus_content: Optional[dict], success: bool):
     if not consensus_content:
         log_warning("Convergence Result: NO CONSENSUS")
         return
-    
+
     broken = consensus_content.get("broken", False)
     status = "BROKEN" if broken else ("CONVERGED" if success else "PARTIAL")
     log_info(f"Convergence Result: {status}")
-    
+
     plan = consensus_content.get("plan", "")
     if plan:
         log_info(f"  Plan: {str(plan)[:300]}{'...' if len(str(plan)) > 300 else ''}")
-    
+
     assignments = consensus_content.get("assignments", {})
     if assignments:
         log_info(f"  Assignments ({len(assignments)} items):")
@@ -335,9 +334,7 @@ def probe_backend_cfn_workspace_alignment(ctx: TestContext) -> None:
     except (json.JSONDecodeError, TypeError):
         return
 
-    ctx.env_info["cfn_primary_workspace_id"] = (
-        workspaces[0].get("id") if workspaces else None
-    )
+    ctx.env_info["cfn_primary_workspace_id"] = workspaces[0].get("id") if workspaces else None
 
     if not workspaces:
         return
@@ -387,9 +384,7 @@ def find_session_room(parent_namespace: str) -> Optional[str]:
     the ``coordination_sessions`` table (sessions do NOT appear in ``rooms``).
     """
     enc = urllib.parse.quote(parent_namespace, safe="")
-    status, body = http_get(
-        f"{BACKEND_URL}/coordination-sessions?parent_room={enc}&limit=1", timeout=15
-    )
+    status, body = http_get(f"{BACKEND_URL}/coordination-sessions?parent_room={enc}&limit=1", timeout=15)
     if status != 200:
         return None
     try:
@@ -466,9 +461,7 @@ def cli_get_coordination_state(room_name: str) -> Optional[str]:
     """
     if ":session:" in room_name:
         parent, _, short_id = room_name.partition(":session:")
-        code, body = http_get(
-            f"{BACKEND_URL}/coordination-sessions?parent_room={parent}&limit=200"
-        )
+        code, body = http_get(f"{BACKEND_URL}/coordination-sessions?parent_room={parent}&limit=200")
         if code == 200:
             try:
                 for sess in json.loads(body) or []:
@@ -556,56 +549,58 @@ def dump_negotiation_debug_info(
 ) -> None:
     """Print debug info when negotiation fails to reach agreement."""
     print(f"\n{YELLOW}━━ DEBUG: Negotiation diagnostics for {room_name} ━━{RESET}")
-    
+
     # Room state
     if session_room:
         state = cli_get_coordination_state(session_room)
         print(f"  Session room: {session_room}")
         print(f"  coordination_state: {state}")
-    
+
     # Consensus content
     if consensus_content:
-        print(f"  Consensus content:")
+        print("  Consensus content:")
         print(f"    plan: {consensus_content.get('plan', 'N/A')[:200]}")
         print(f"    assignments: {consensus_content.get('assignments', {})}")
         print(f"    broken: {consensus_content.get('broken', 'N/A')}")
     else:
-        print(f"  Consensus content: None (no consensus received)")
-    
+        print("  Consensus content: None (no consensus received)")
+
     # Backend and CFN logs
     print(f"\n  {DIM}Recent logs:{RESET}")
     backend_logs = capture_backend_logs(50)
     cfn_logs = capture_cfn_logs(50)
     ioc_indicators = check_ioc_path_in_logs(backend_logs, cfn_logs)
-    print(f"    IOC path indicators:")
+    print("    IOC path indicators:")
     for k, v in ioc_indicators.items():
         status = f"{GREEN}✓{RESET}" if v else f"{RED}✗{RESET}"
         print(f"      {status} {k}")
-    
+
     # Show relevant log lines
     relevant_lines = [
-        line for line in backend_logs.split("\n")
+        line
+        for line in backend_logs.split("\n")
         if any(kw in line.lower() for kw in ["cfn", "negotiat", "consensus", "tick", "error", "exception"])
     ][-10:]
     if relevant_lines:
         print(f"\n    {DIM}Relevant log lines:{RESET}")
         for line in relevant_lines:
             print(f"      {DIM}{line[:120]}{RESET}")
-    
+
     # CFN logs
     print(f"\n  {DIM}Recent CFN node logs:{RESET}")
     cfn_logs = capture_cfn_logs(20)
     cfn_relevant = [
-        line for line in cfn_logs.split("\n")
+        line
+        for line in cfn_logs.split("\n")
         if any(kw in line.lower() for kw in ["start", "decide", "issue", "option", "error", "llm"])
     ][-8:]
     if cfn_relevant:
         for line in cfn_relevant:
             print(f"      {DIM}{line[:120]}{RESET}")
-    
+
     if extra_context:
         print(f"\n  {DIM}Extra context: {extra_context}{RESET}")
-    
+
     print(f"{YELLOW}━━ END DEBUG ━━{RESET}\n")
 
 
@@ -616,7 +611,7 @@ def print_section(num: int, title: str):
 
 def print_convergence_header(topic: str, agents: list[tuple[str, str, str]]):
     """Print convergence test header with agents and their biases.
-    
+
     Args:
         topic: What the agents are converging on
         agents: List of (handle, bias_label, position) tuples
@@ -627,9 +622,9 @@ def print_convergence_header(topic: str, agents: list[tuple[str, str, str]]):
         print(f"  {CYAN}│ {BOLD}{handle}{RESET} {DIM}({bias}){RESET}")
         # Truncate long positions
         pos_display = position[:80] + "..." if len(position) > 80 else position
-        print(f"  {CYAN}│   {DIM}\"{pos_display}\"{RESET}")
+        print(f'  {CYAN}│   {DIM}"{pos_display}"{RESET}')
     print(f"  {CYAN}╰─{RESET}\n")
-    
+
     # Also log to file
     log_convergence_header(topic, agents)
 
@@ -638,26 +633,26 @@ def print_convergence_result(consensus_content: Optional[dict], success: bool):
     """Print convergence test result with consensus details."""
     # Log to file
     log_convergence_result(consensus_content, success)
-    
+
     if not consensus_content:
         print(f"\n  {RED}╭─ Result: NO CONSENSUS{RESET}")
         print(f"  {RED}╰─ Agents failed to converge{RESET}\n")
         return
-    
+
     broken = consensus_content.get("broken", False)
     plan = consensus_content.get("plan", "")
     assignments = consensus_content.get("assignments", {})
-    
+
     if broken:
         status = f"{RED}BROKEN{RESET}"
     elif success:
         status = f"{GREEN}CONVERGED{RESET}"
     else:
         status = f"{YELLOW}PARTIAL{RESET}"
-    
+
     print(f"\n  {CYAN}╭─ Result: {status}{RESET}")
     print(f"  {CYAN}│{RESET}")
-    
+
     if assignments:
         print(f"  {CYAN}│ {BOLD}Assignments:{RESET}")
         for key, value in list(assignments.items())[:5]:
@@ -666,7 +661,7 @@ def print_convergence_result(consensus_content: Optional[dict], success: bool):
             print(f"  {CYAN}│   • {key_display}: {DIM}{val_display}{RESET}")
         if len(assignments) > 5:
             print(f"  {CYAN}│   {DIM}... and {len(assignments) - 5} more{RESET}")
-    
+
     if plan:
         print(f"  {CYAN}│{RESET}")
         print(f"  {CYAN}│ {BOLD}Plan:{RESET}")
@@ -691,11 +686,13 @@ def print_convergence_result(consensus_content: Optional[dict], success: bool):
             print(f"  {CYAN}│   {DIM}{line}{RESET}")
         if len(lines) > 4:
             print(f"  {CYAN}│   {DIM}...{RESET}")
-    
+
     print(f"  {CYAN}╰─{RESET}\n")
 
 
-def print_check(name: str, passed: bool, error: Optional[str] = None, skipped: bool = False, skip_reason: Optional[str] = None):
+def print_check(
+    name: str, passed: bool, error: Optional[str] = None, skipped: bool = False, skip_reason: Optional[str] = None
+):
     if skipped:
         print(f"  {YELLOW}⊘ {name}{RESET}")
         if skip_reason:
@@ -709,7 +706,14 @@ def print_check(name: str, passed: bool, error: Optional[str] = None, skipped: b
                 print(f"    {DIM}{line}{RESET}")
 
 
-def check(ctx: TestContext, name: str, passed: bool, error: Optional[str] = None, skipped: bool = False, skip_reason: Optional[str] = None):
+def check(
+    ctx: TestContext,
+    name: str,
+    passed: bool,
+    error: Optional[str] = None,
+    skipped: bool = False,
+    skip_reason: Optional[str] = None,
+):
     result = CheckResult(name=name, passed=passed, error=error, skipped=skipped, skip_reason=skip_reason)
     ctx.results.append(result)
     # Log to file
@@ -718,6 +722,7 @@ def check(ctx: TestContext, name: str, passed: bool, error: Optional[str] = None
     if not passed and not skipped and os.environ.get("STOP_ON_FAIL") == "1":
         print(f"\n{RED}Stopping on first failure due to STOP_ON_FAIL=1{RESET}")
         import sys
+
         sys.exit(1)
     return passed
 
@@ -726,9 +731,10 @@ def check(ctx: TestContext, name: str, passed: bool, error: Optional[str] = None
 # Section 0: Environment Detection
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def detect_environment(ctx: TestContext):
     print_section(0, "Environment detection")
-    
+
     # Backend health
     health_url = BACKEND_URL.replace("/api", "", 1)
     status_code, body = http_get(f"{health_url}/health")
@@ -737,20 +743,20 @@ def detect_environment(ctx: TestContext):
             health = json.loads(body)
             ctx.env_info["backend_version"] = health.get("version", "unknown")
             ctx.env_info["backend_status"] = health.get("status", "unknown")
-            
+
             # Parse nested status objects
             db_info = health.get("database", {})
             if isinstance(db_info, dict):
                 ctx.env_info["db_status"] = db_info.get("status", "unknown")
             else:
                 ctx.env_info["db_status"] = str(db_info)
-            
+
             embed_info = health.get("embeddings", {})
             if isinstance(embed_info, dict):
                 ctx.env_info["embeddings_status"] = embed_info.get("status", "unknown")
             else:
                 ctx.env_info["embeddings_status"] = str(embed_info)
-            
+
             llm_info = health.get("llm", {})
             if isinstance(llm_info, dict):
                 llm_status = llm_info.get("status", "unknown")
@@ -765,7 +771,7 @@ def detect_environment(ctx: TestContext):
             ctx.env_info["backend_status"] = "parse_error"
     else:
         ctx.env_info["backend_status"] = f"unreachable ({status_code})"
-    
+
     # Check if LLM is working - look for warning signs in the message
     llm_status = ctx.env_info.get("llm_status", "")
     llm_message = ctx.env_info.get("llm_message", "")
@@ -773,7 +779,7 @@ def detect_environment(ctx: TestContext):
         ctx.skip_llm_tests = True
     elif "warning" in llm_message.lower() or "does not match" in llm_message.lower():
         ctx.env_info["llm_warning"] = True
-    
+
     # IOC/CFN detection
     cfn_status, _ = http_get(f"{CFN_MGMT_URL}/health")
     # node-svc 0.1.6 dropped the public /health route; the real liveness probe
@@ -789,21 +795,21 @@ def detect_environment(ctx: TestContext):
     # 200 == healthy, 404 == route exists but path moved (still up)
     ctx.env_info["cfn_svc_reachable"] = cfn_svc_status in (200, 404)
     ctx.env_info["ioc_active"] = ctx.env_info["cfn_mgmt_reachable"]
-    
+
     if not ctx.env_info["ioc_active"]:
         ctx.skip_cfn_tests = True
-    
+
     # Get workspace/mas IDs from config if available
     rc, stdout, _ = run_cmd(["mycelium", "config", "get", "server.workspace_id"])
     ctx.env_info["workspace_id"] = stdout.strip() if rc == 0 and stdout.strip() else "not configured"
-    
+
     rc, stdout, _ = run_cmd(["mycelium", "config", "get", "server.mas_id"])
     ctx.env_info["mas_id"] = stdout.strip() if rc == 0 and stdout.strip() else "not configured"
-    
+
     # Resource mode
     rc, stdout, _ = run_cmd(["mycelium", "config", "get", "backend.resource_mode"])
     ctx.env_info["resource_mode"] = stdout.strip() if rc == 0 and stdout.strip() else "local"
-    
+
     # Matrix server detection
     matrix_status, matrix_body = http_get(f"{MATRIX_URL}/_matrix/client/versions")
     ctx.env_info["matrix_reachable"] = matrix_status == 200
@@ -811,28 +817,28 @@ def detect_environment(ctx: TestContext):
         try:
             versions = json.loads(matrix_body).get("versions", [])
             ctx.env_info["matrix_versions"] = versions[:3] if versions else []
-        except:
+        except Exception:
             ctx.env_info["matrix_versions"] = []
-    
+
     if not ctx.env_info["matrix_reachable"]:
         ctx.skip_matrix_tests = True
-    
+
     # Format LLM status line
-    llm_line = ctx.env_info.get('llm_status', 'unknown')
-    if ctx.env_info.get('llm_model'):
+    llm_line = ctx.env_info.get("llm_status", "unknown")
+    if ctx.env_info.get("llm_model"):
         llm_line += f" ({ctx.env_info['llm_model']})"
     if ctx.skip_llm_tests:
         llm_line += f" {YELLOW}— LLM tests will be skipped{RESET}"
-    elif ctx.env_info.get('llm_warning'):
+    elif ctx.env_info.get("llm_warning"):
         llm_line += f" {YELLOW}— warning: key format mismatch{RESET}"
-    
+
     # Format Matrix status
     matrix_line = "reachable" if ctx.env_info.get("matrix_reachable") else "unreachable"
     if ctx.env_info.get("matrix_versions"):
         matrix_line += f" ({', '.join(ctx.env_info['matrix_versions'][:2])}...)"
     if ctx.skip_matrix_tests:
         matrix_line += f" {YELLOW}— Matrix tests will be skipped{RESET}"
-    
+
     probe_backend_cfn_workspace_alignment(ctx)
 
     coord_line = ""
@@ -842,21 +848,21 @@ def detect_environment(ctx: TestContext):
     # Print environment summary
     print(f"""
   Backend API:     {BACKEND_URL}
-  Backend version: {ctx.env_info.get('backend_version', 'unknown')}  (status: {ctx.env_info.get('backend_status', 'unknown')})
-  Database:        {ctx.env_info.get('db_status', 'unknown')}
-  Embeddings:      {ctx.env_info.get('embeddings_status', 'unknown')}
+  Backend version: {ctx.env_info.get("backend_version", "unknown")}  (status: {ctx.env_info.get("backend_status", "unknown")})
+  Database:        {ctx.env_info.get("db_status", "unknown")}
+  Embeddings:      {ctx.env_info.get("embeddings_status", "unknown")}
   LLM:             {llm_line}
 
   Matrix:          {MATRIX_URL} ({matrix_line})
 
-  IOC/CFN:         {'ACTIVE' if ctx.env_info.get('ioc_active') else 'INACTIVE'}
-  workspace_id:    {ctx.env_info.get('workspace_id', 'n/a')}
-  mas_id:          {ctx.env_info.get('mas_id', 'n/a')}
-  cfn-mgmt-plane:  {CFN_MGMT_URL} ({'reachable' if ctx.env_info.get('cfn_mgmt_reachable') else 'unreachable'})
-  cfn-svc:         {CFN_SVC_URL} ({'reachable' if ctx.env_info.get('cfn_svc_reachable') else 'unreachable'})
-  CFN workspace:   {ctx.env_info.get('cfn_primary_workspace_id') or 'n/a'}{coord_line}
+  IOC/CFN:         {"ACTIVE" if ctx.env_info.get("ioc_active") else "INACTIVE"}
+  workspace_id:    {ctx.env_info.get("workspace_id", "n/a")}
+  mas_id:          {ctx.env_info.get("mas_id", "n/a")}
+  cfn-mgmt-plane:  {CFN_MGMT_URL} ({"reachable" if ctx.env_info.get("cfn_mgmt_reachable") else "unreachable"})
+  cfn-svc:         {CFN_SVC_URL} ({"reachable" if ctx.env_info.get("cfn_svc_reachable") else "unreachable"})
+  CFN workspace:   {ctx.env_info.get("cfn_primary_workspace_id") or "n/a"}{coord_line}
 
-  Resource mode:   {ctx.env_info.get('resource_mode', 'unknown')}
+  Resource mode:   {ctx.env_info.get("resource_mode", "unknown")}
 """)
 
 
@@ -864,17 +870,18 @@ def detect_environment(ctx: TestContext):
 # Section 1: Room Lifecycle
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_room_lifecycle(ctx: TestContext):
     print_section(1, "Room lifecycle")
-    
+
     # Create room
     rc, stdout, stderr = run_cmd(["mycelium", "room", "create", ctx.room_name])
     check(ctx, "Create room", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # Use room
     rc, stdout, stderr = run_cmd(["mycelium", "room", "use", ctx.room_name])
     check(ctx, "Use room", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # List rooms
     rc, stdout, stderr = run_cmd(["mycelium", "room", "ls"])
     room_in_list = ctx.room_name in stdout if rc == 0 else False
@@ -885,28 +892,59 @@ def test_room_lifecycle(ctx: TestContext):
 # Section 2: Multi-agent Memory
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_multi_agent_memory(ctx: TestContext):
     print_section(2, "Multi-agent memory (4 agents, mixed categories)")
-    
+
     memories = [
-        ("alpha", "decisions/database", "Decided to use PostgreSQL for persistence. SQLite considered but rejected for concurrency."),
-        ("alpha", "decisions/llm", "Using Claude Haiku for synthesis, Sonnet for complex reasoning. Cost/quality tradeoff."),
+        (
+            "alpha",
+            "decisions/database",
+            "Decided to use PostgreSQL for persistence. SQLite considered but rejected for concurrency.",
+        ),
+        (
+            "alpha",
+            "decisions/llm",
+            "Using Claude Haiku for synthesis, Sonnet for complex reasoning. Cost/quality tradeoff.",
+        ),
         ("beta", "status/frontend", "React 19 migration complete. Server components working. HMR fixed."),
         ("beta", "work/tailwind-v4", "Upgraded to Tailwind v4. Removed autoprefixer (now built-in). Fixed JIT issues."),
-        ("gamma", "context/dep-updates", "Dependabot PRs: 3 pending (lodash, axios, typescript). lodash is security-critical."),
-        ("gamma", "decisions/no-autoprefixer", "Dropped autoprefixer from deps. Tailwind v4 includes it. Saves 2MB bundle."),
-        ("delta", "status/backend-deps", "All backend deps up to date. LiteLLM pinned to 1.55.3 due to breaking change in 1.56."),
-        ("delta", "decisions/litellm-pin", "Pinned LiteLLM to 1.55.3. Version 1.56 broke streaming. Issue filed upstream."),
+        (
+            "gamma",
+            "context/dep-updates",
+            "Dependabot PRs: 3 pending (lodash, axios, typescript). lodash is security-critical.",
+        ),
+        (
+            "gamma",
+            "decisions/no-autoprefixer",
+            "Dropped autoprefixer from deps. Tailwind v4 includes it. Saves 2MB bundle.",
+        ),
+        (
+            "delta",
+            "status/backend-deps",
+            "All backend deps up to date. LiteLLM pinned to 1.55.3 due to breaking change in 1.56.",
+        ),
+        (
+            "delta",
+            "decisions/litellm-pin",
+            "Pinned LiteLLM to 1.55.3. Version 1.56 broke streaming. Issue filed upstream.",
+        ),
     ]
-    
+
     for agent, key, content in memories:
-        rc, stdout, stderr = run_cmd([
-            "mycelium", "memory", "set",
-            "--room", ctx.room_name,
-            "--handle", agent,
-            key,
-            content,
-        ])
+        rc, stdout, stderr = run_cmd(
+            [
+                "mycelium",
+                "memory",
+                "set",
+                "--room",
+                ctx.room_name,
+                "--handle",
+                agent,
+                key,
+                content,
+            ]
+        )
         error_msg = None
         if rc != 0:
             error_msg = stderr.strip() if stderr.strip() else stdout.strip()
@@ -919,21 +957,22 @@ def test_multi_agent_memory(ctx: TestContext):
 # Section 3: Memory Reads & Structured Views
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_memory_reads(ctx: TestContext):
     print_section(3, "Memory reads & structured views")
-    
+
     # Get single memory
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "get", "--room", ctx.room_name, "decisions/database"])
     check(ctx, "Get single memory", rc == 0 and "PostgreSQL" in stdout, error=stderr if rc != 0 else None)
-    
+
     # List all memories
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "ls", "--room", ctx.room_name])
     check(ctx, "List all memories", rc == 0 and "decisions" in stdout.lower(), error=stderr if rc != 0 else None)
-    
+
     # Decisions view
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "decisions", "--room", ctx.room_name])
     check(ctx, "Decisions view", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # Status view
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "status", "--room", ctx.room_name])
     check(ctx, "Status view", rc == 0, error=stderr if rc != 0 else None)
@@ -943,15 +982,18 @@ def test_memory_reads(ctx: TestContext):
 # Section 4: Semantic Search
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_semantic_search(ctx: TestContext):
     print_section(4, "Semantic search")
-    
+
     # Search for database decisions
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "search", "--room", ctx.room_name, "database decisions"])
     check(ctx, "Search: database decisions", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # Search for failures
-    rc, stdout, stderr = run_cmd(["mycelium", "memory", "search", "--room", ctx.room_name, "what failed or was dropped"])
+    rc, stdout, stderr = run_cmd(
+        ["mycelium", "memory", "search", "--room", ctx.room_name, "what failed or was dropped"]
+    )
     check(ctx, "Search: what failed or was dropped", rc == 0, error=stderr if rc != 0 else None)
 
 
@@ -959,9 +1001,10 @@ def test_semantic_search(ctx: TestContext):
 # Section 5: Synthesis & Catchup
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_synthesis(ctx: TestContext):
     print_section(5, "Synthesis & catchup")
-    
+
     if ctx.skip_llm_tests:
         check(ctx, "Synthesize room", False, skipped=True, skip_reason="LLM not available (auth_error)")
     else:
@@ -970,7 +1013,7 @@ def test_synthesis(ctx: TestContext):
         if rc != 0:
             error_msg = stderr.strip() if stderr.strip() else stdout.strip()
         check(ctx, "Synthesize room", rc == 0, error=error_msg)
-    
+
     # Catchup should work even without synthesis
     rc, stdout, stderr = run_cmd(["mycelium", "catchup", "--room", ctx.room_name])
     check(ctx, "Catchup briefing", rc == 0, error=stderr if rc != 0 else None)
@@ -980,81 +1023,120 @@ def test_synthesis(ctx: TestContext):
 # Section 6: Consensus Negotiation (two agents with differing requirements)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_consensus_negotiation(ctx: TestContext):
     print_section(6, "Consensus negotiation (differing requirements)")
-    
+
     # Create a negotiation room
     nego_room = f"{ctx.room_name}-nego"
     rc, stdout, stderr = run_cmd(["mycelium", "room", "create", nego_room])
     check(ctx, "Create negotiation room", rc == 0, error=stderr if rc != 0 else None)
-    
+
     if rc != 0:
-        for name in ["Agent A shares position", "Agent B shares position", 
-                     "Both positions in memory", "Create session", "Agents join session",
-                     "Session active"]:
+        for name in [
+            "Agent A shares position",
+            "Agent B shares position",
+            "Both positions in memory",
+            "Create session",
+            "Agents join session",
+            "Session active",
+        ]:
             check(ctx, name, False, skipped=True, skip_reason="Room create failed")
         return
-    
+
     # Agent A: Wants high quality, extended scope (perfectionist)
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", nego_room,
-        "--handle", "agent-a",
-        "context/agent-a-requirements",
-        "Priority: code quality and test coverage. Willing to extend timeline for thorough implementation.",
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-a",
+            "context/agent-a-requirements",
+            "Priority: code quality and test coverage. Willing to extend timeline for thorough implementation.",
+        ]
+    )
     check(ctx, "Agent A shares position", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # Agent B: Wants fast delivery, standard scope (pragmatist)
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", nego_room,
-        "--handle", "agent-b",
-        "context/agent-b-requirements",
-        "Priority: ship quickly. MVP first, iterate later. Standard quality is acceptable.",
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-b",
+            "context/agent-b-requirements",
+            "Priority: ship quickly. MVP first, iterate later. Standard quality is acceptable.",
+        ]
+    )
     check(ctx, "Agent B shares position", rc == 0, error=stderr if rc != 0 else None)
-    
+
     # Verify both positions are in shared memory
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "ls", "--room", nego_room, "context"])
     both_visible = "agent-a-requirements" in stdout and "agent-b-requirements" in stdout
-    check(ctx, "Both positions in memory", rc == 0 and both_visible,
-          error="One or both positions not found" if not both_visible else None)
-    
+    check(
+        ctx,
+        "Both positions in memory",
+        rc == 0 and both_visible,
+        error="One or both positions not found" if not both_visible else None,
+    )
+
     # Create negotiation session
     rc, stdout, stderr = run_cmd(["mycelium", "session", "create", "--room", nego_room])
     check(ctx, "Create session", rc == 0, error=stderr if rc != 0 else None)
-    
+
     if rc != 0:
         check(ctx, "Agents join session", False, skipped=True, skip_reason="Session create failed")
         check(ctx, "Session active", False, skipped=True, skip_reason="Session create failed")
         return
-    
+
     # Both agents join with their positions
-    rc1, _, stderr1 = run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-a",
-        "--message", "I want budget=high, timeline=extended, scope=full, quality=premium",
-    ])
-    rc2, _, stderr2 = run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-b",
-        "--message", "I want budget=low, timeline=express, scope=mvp, quality=standard",
-    ])
+    rc1, _, stderr1 = run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-a",
+            "--message",
+            "I want budget=high, timeline=extended, scope=full, quality=premium",
+        ]
+    )
+    rc2, _, stderr2 = run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-b",
+            "--message",
+            "I want budget=low, timeline=express, scope=mvp, quality=standard",
+        ]
+    )
     both_joined = rc1 == 0 and rc2 == 0
-    check(ctx, "Agents join session", both_joined,
-          error=f"agent-a: {stderr1}\nagent-b: {stderr2}" if not both_joined else None)
-    
+    check(
+        ctx,
+        "Agents join session",
+        both_joined,
+        error=f"agent-a: {stderr1}\nagent-b: {stderr2}" if not both_joined else None,
+    )
+
     print("  Waiting 5s for CognitiveEngine to process...")
     time.sleep(5)
-    
+
     # Verify session is active
     rc, stdout, stderr = run_cmd(["mycelium", "session", "ls", "--room", nego_room])
-    check(ctx, "Session active", rc == 0 and nego_room in stdout,
-          error=stderr if rc != 0 else None)
-    
+    check(ctx, "Session active", rc == 0 and nego_room in stdout, error=stderr if rc != 0 else None)
+
     # Clean up the negotiation room
     run_cmd(["mycelium", "room", "delete", nego_room, "--force"])
 
@@ -1130,25 +1212,40 @@ def test_session_join_idempotency(ctx: TestContext):
     rc, _, stderr = run_cmd(["mycelium", "room", "create", room_a])
     check(ctx, "Idem-A: create room", rc == 0, error=stderr if rc != 0 else None)
     if rc != 0:
-        for name in ["Idem-A: first join", "Idem-A: second join (dup)",
-                     "Idem-A: one participant row per handle"]:
+        for name in ["Idem-A: first join", "Idem-A: second join (dup)", "Idem-A: one participant row per handle"]:
             check(ctx, name, False, skipped=True, skip_reason="Room create failed")
     else:
         register_room(ctx, room_a)
         run_cmd(["mycelium", "session", "create", "--room", room_a])
 
-        rc1, _, e1 = run_cmd([
-            "mycelium", "session", "join",
-            "--room", room_a, "--handle", "agent-dup",
-            "--message", "first join",
-        ])
+        rc1, _, e1 = run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                room_a,
+                "--handle",
+                "agent-dup",
+                "--message",
+                "first join",
+            ]
+        )
         check(ctx, "Idem-A: first join", rc1 == 0, error=e1 if rc1 != 0 else None)
 
-        rc2, _, e2 = run_cmd([
-            "mycelium", "session", "join",
-            "--room", room_a, "--handle", "agent-dup",
-            "--message", "second join (dup)",
-        ])
+        rc2, _, e2 = run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                room_a,
+                "--handle",
+                "agent-dup",
+                "--message",
+                "second join (dup)",
+            ]
+        )
         # PR #286 made this idempotent; pre-fix this either errored or
         # silently inserted a second Participant row.
         check(ctx, "Idem-A: second join (dup)", rc2 == 0, error=e2 if rc2 != 0 else None)
@@ -1159,8 +1256,7 @@ def test_session_join_idempotency(ctx: TestContext):
             ctx,
             "Idem-A: one participant row per handle",
             ok,
-            error=f"expected 1 participant for 1 handle, got total={total} distinct={distinct}"
-            if not ok else None,
+            error=f"expected 1 participant for 1 handle, got total={total} distinct={distinct}" if not ok else None,
         )
 
         run_cmd(["mycelium", "room", "delete", room_a, "--force"])
@@ -1170,8 +1266,7 @@ def test_session_join_idempotency(ctx: TestContext):
     rc, _, stderr = run_cmd(["mycelium", "room", "create", room_b])
     check(ctx, "Idem-B: create room", rc == 0, error=stderr if rc != 0 else None)
     if rc != 0:
-        for name in ["Idem-B: both joins succeed",
-                     "Idem-B: exactly one coordination session"]:
+        for name in ["Idem-B: both joins succeed", "Idem-B: exactly one coordination session"]:
             check(ctx, name, False, skipped=True, skip_reason="Room create failed")
         return
 
@@ -1184,17 +1279,27 @@ def test_session_join_idempotency(ctx: TestContext):
     results: dict[str, tuple[int, str]] = {}
 
     def _join(handle: str) -> None:
-        rc, _, err = run_cmd([
-            "mycelium", "session", "join",
-            "--room", room_b, "--handle", handle,
-            "--message", f"{handle} position",
-        ])
+        rc, _, err = run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                room_b,
+                "--handle",
+                handle,
+                "--message",
+                f"{handle} position",
+            ]
+        )
         results[handle] = (rc, err)
 
     t1 = threading.Thread(target=_join, args=("agent-race-a",))
     t2 = threading.Thread(target=_join, args=("agent-race-b",))
-    t1.start(); t2.start()
-    t1.join(timeout=60); t2.join(timeout=60)
+    t1.start()
+    t2.start()
+    t1.join(timeout=60)
+    t2.join(timeout=60)
 
     rc_a, err_a = results.get("agent-race-a", (-1, "thread did not finish"))
     rc_b, err_b = results.get("agent-race-b", (-1, "thread did not finish"))
@@ -1203,8 +1308,7 @@ def test_session_join_idempotency(ctx: TestContext):
         ctx,
         "Idem-B: both joins succeed",
         both_ok,
-        error=f"agent-race-a: rc={rc_a} {err_a}\nagent-race-b: rc={rc_b} {err_b}"
-        if not both_ok else None,
+        error=f"agent-race-a: rc={rc_a} {err_a}\nagent-race-b: rc={rc_b} {err_b}" if not both_ok else None,
     )
 
     n_sessions = _count_coord_sessions(room_b)
@@ -1212,8 +1316,7 @@ def test_session_join_idempotency(ctx: TestContext):
         ctx,
         "Idem-B: exactly one coordination session",
         n_sessions == 1,
-        error=f"expected 1 CoordinationSession for {room_b}, got {n_sessions}"
-        if n_sessions != 1 else None,
+        error=f"expected 1 CoordinationSession for {room_b}, got {n_sessions}" if n_sessions != 1 else None,
     )
 
     run_cmd(["mycelium", "room", "delete", room_b, "--force"])
@@ -1374,11 +1477,9 @@ def test_cfn_llm_counters(ctx: TestContext):
     ]
 
     if ctx.coordination_blocked_reason:
-        check(ctx, "CFN-LLM: create room", False, skipped=True,
-              skip_reason=ctx.coordination_blocked_reason)
+        check(ctx, "CFN-LLM: create room", False, skipped=True, skip_reason=ctx.coordination_blocked_reason)
         for name in check_names:
-            check(ctx, name, False, skipped=True,
-                  skip_reason=ctx.coordination_blocked_reason)
+            check(ctx, name, False, skipped=True, skip_reason=ctx.coordination_blocked_reason)
         return
 
     room = f"{ctx.room_name}-cfn-llm"
@@ -1397,9 +1498,7 @@ def test_cfn_llm_counters(ctx: TestContext):
 
     # ``--json`` so we can extract the session display_name (``<room>:session:<short>``)
     # deterministically rather than scraping the human-readable output.
-    rc, stdout, stderr = run_cmd(
-        ["mycelium", "--json", "session", "create", "--room", room]
-    )
+    rc, stdout, stderr = run_cmd(["mycelium", "--json", "session", "create", "--room", room])
     spawn_ok = rc == 0
     check(ctx, "CFN-LLM: session spawn", spawn_ok, error=stderr if not spawn_ok else None)
     if not spawn_ok:
@@ -1420,16 +1519,32 @@ def test_cfn_llm_counters(ctx: TestContext):
     # Two joins → CFN sees full participant set → backend's join-window timer
     # fires _run_tick(0) → _run_cfn_negotiation → CFN start_negotiation
     # (intent_discovery + generate_options_with_memory).
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", room, "--handle", "cfn-llm-a",
-        "--message", "Prioritize low latency over throughput",
-    ])
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", room, "--handle", "cfn-llm-b",
-        "--message", "Prioritize throughput over latency",
-    ])
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            room,
+            "--handle",
+            "cfn-llm-a",
+            "--message",
+            "Prioritize low latency over throughput",
+        ]
+    )
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            room,
+            "--handle",
+            "cfn-llm-b",
+            "--message",
+            "Prioritize throughput over latency",
+        ]
+    )
 
     # ── Phase 1: wait for coordination_start ────────────────────────────────
     # The join window is COORDINATION_JOIN_WINDOW_SECONDS=30 (extended on
@@ -1452,13 +1567,8 @@ def test_cfn_llm_counters(ctx: TestContext):
         # requiring a follow-up reproduction. ``session_state`` tells us
         # whether the coord session row is even alive; ``recent_message_types``
         # confirms whether any backend-posted messages reached the room.
-        session_state = (
-            cli_get_coordination_state(session_room)
-            if session_room else None
-        )
-        _, recent_msgs = (
-            fetch_room_messages(session_room) if session_room else (0, [])
-        )
+        session_state = cli_get_coordination_state(session_room) if session_room else None
+        _, recent_msgs = fetch_room_messages(session_room) if session_room else (0, [])
         recent_types = [m.get("message_type") for m in (recent_msgs or [])][:5]
         check(
             ctx,
@@ -1474,8 +1584,7 @@ def test_cfn_llm_counters(ctx: TestContext):
             ),
         )
         for name in check_names[2:]:
-            check(ctx, name, False, skipped=True,
-                  skip_reason="Phase 1 (coordination_start) did not fire")
+            check(ctx, name, False, skipped=True, skip_reason="Phase 1 (coordination_start) did not fire")
         run_cmd(["mycelium", "room", "delete", room, "--force"])
         return
 
@@ -1515,16 +1624,18 @@ def test_cfn_llm_counters(ctx: TestContext):
             f"for ``generate_options_with_memory: fabric lookup failed`` "
             f"(the known 120s self-call hang)."
         )
-        if calls_delta <= 0 else None,
+        if calls_delta <= 0
+        else None,
     )
     check(
         ctx,
         "CFN-LLM: input+output tokens advanced",
         in_delta > 0 and out_delta > 0,
         error=(
-            f"expected both input_tokens and output_tokens to advance; "
-            f"input_delta={in_delta}, output_delta={out_delta}"
-        ) if not (in_delta > 0 and out_delta > 0) else None,
+            f"expected both input_tokens and output_tokens to advance; input_delta={in_delta}, output_delta={out_delta}"
+        )
+        if not (in_delta > 0 and out_delta > 0)
+        else None,
     )
 
     # ``room`` is freshly randomized so any non-zero by_room.<room>* entry
@@ -1532,18 +1643,17 @@ def test_cfn_llm_counters(ctx: TestContext):
     # exists — the exact session short_id varies per spawn.
     cfn_llm_after = after.get("cfn_llm") or {}
     by_room_keys = [
-        k for k in cfn_llm_after
-        if k.startswith(f"by_room.{room}") and k.endswith(".calls")
-        and int(cfn_llm_after.get(k, 0) or 0) > 0
+        k
+        for k in cfn_llm_after
+        if k.startswith(f"by_room.{room}") and k.endswith(".calls") and int(cfn_llm_after.get(k, 0) or 0) > 0
     ]
     check(
         ctx,
         "CFN-LLM: by_room.<session>.* populated",
         bool(by_room_keys),
-        error=(
-            f"expected at least one cfn_llm.by_room.{room}*.calls > 0; "
-            f"found keys={by_room_keys or '(none)'}"
-        ) if not by_room_keys else None,
+        error=(f"expected at least one cfn_llm.by_room.{room}*.calls > 0; found keys={by_room_keys or '(none)'}")
+        if not by_room_keys
+        else None,
     )
 
     run_cmd(["mycelium", "room", "delete", room, "--force"])
@@ -1573,10 +1683,8 @@ def _matrix_token(agent: str) -> str:
         return ""
 
 
-MATRIX_AGENTS = {
-    agent: _matrix_token(agent)
-    for agent in ("agent-alpha", "agent-beta", "agent-gamma")
-}
+MATRIX_AGENTS = {agent: _matrix_token(agent) for agent in ("agent-alpha", "agent-beta", "agent-gamma")}
+
 
 def matrix_send_message(room_id: str, token: str, message: str) -> tuple[int, str]:
     """Send a message to a Matrix room."""
@@ -1613,14 +1721,12 @@ def matrix_get_messages(room_id: str, token: str, limit: int = 10) -> tuple[int,
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             messages = [
-                e.get("content", {}).get("body", "")
-                for e in data.get("chunk", [])
-                if e.get("type") == "m.room.message"
+                e.get("content", {}).get("body", "") for e in data.get("chunk", []) if e.get("type") == "m.room.message"
             ]
             return resp.status, messages
     except urllib.error.HTTPError as e:
         return e.code, []
-    except Exception as e:
+    except Exception:
         return -1, []
 
 
@@ -1636,13 +1742,13 @@ def matrix_resolve_room_alias(alias: str, token: str) -> Optional[str]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             return data.get("room_id")
-    except:
+    except Exception:
         return None
 
 
 def test_matrix_communication(ctx: TestContext):
     print_section(7, "Matrix agent communication")
-    
+
     if ctx.skip_matrix_tests:
         check(ctx, "Matrix server reachable", False, skipped=True, skip_reason="Matrix server not reachable")
         check(ctx, "Resolve #agents:local room", False, skipped=True, skip_reason="Matrix server not reachable")
@@ -1650,39 +1756,43 @@ def test_matrix_communication(ctx: TestContext):
         check(ctx, "Agent beta receives message", False, skipped=True, skip_reason="Matrix server not reachable")
         check(ctx, "Multi-agent conversation", False, skipped=True, skip_reason="Matrix server not reachable")
         return
-    
+
     # Verify Matrix is reachable (already checked, but explicit test)
     check(ctx, "Matrix server reachable", ctx.env_info.get("matrix_reachable", False))
-    
+
     # Resolve the #agents:local room
     alpha_token = MATRIX_AGENTS["agent-alpha"]
     room_id = matrix_resolve_room_alias("#agents:local", alpha_token)
-    
+
     if not room_id:
         check(ctx, "Resolve #agents:local room", False, error="Could not resolve room alias")
         check(ctx, "Agent alpha sends message", False, skipped=True, skip_reason="Room not found")
         check(ctx, "Agent beta receives message", False, skipped=True, skip_reason="Room not found")
         check(ctx, "Multi-agent conversation", False, skipped=True, skip_reason="Room not found")
         return
-    
+
     check(ctx, "Resolve #agents:local room", True)
     ctx.matrix_room_id = room_id
-    
+
     # Agent alpha sends a message
     test_msg = f"Test message from alpha at {time.time()}"
     status, _ = matrix_send_message(room_id, alpha_token, test_msg)
     check(ctx, "Agent alpha sends message", status == 200, error=f"HTTP {status}" if status != 200 else None)
-    
+
     # Brief delay for message propagation
     time.sleep(0.5)
-    
+
     # Agent beta reads messages
     beta_token = MATRIX_AGENTS["agent-beta"]
     status, messages = matrix_get_messages(room_id, beta_token, limit=5)
     message_received = any(test_msg in msg for msg in messages)
-    check(ctx, "Agent beta receives message", status == 200 and message_received,
-          error=f"Message not found in recent messages" if not message_received else None)
-    
+    check(
+        ctx,
+        "Agent beta receives message",
+        status == 200 and message_received,
+        error="Message not found in recent messages" if not message_received else None,
+    )
+
     # Multi-agent conversation: all agents send, then verify
     conversation_id = uuid.uuid4().hex[:8]
     all_sent = True
@@ -1691,23 +1801,27 @@ def test_matrix_communication(ctx: TestContext):
         status, _ = matrix_send_message(room_id, token, msg)
         if status != 200:
             all_sent = False
-    
+
     time.sleep(0.5)
-    
+
     # Verify gamma can see all messages
     gamma_token = MATRIX_AGENTS["agent-gamma"]
     status, messages = matrix_get_messages(room_id, gamma_token, limit=10)
     all_visible = all(
-        any(f"[{conversation_id}] Hello from {agent}" in msg for msg in messages)
-        for agent in MATRIX_AGENTS.keys()
+        any(f"[{conversation_id}] Hello from {agent}" in msg for msg in messages) for agent in MATRIX_AGENTS.keys()
     )
-    check(ctx, "Multi-agent conversation", all_sent and all_visible,
-          error="Not all agents' messages visible" if not all_visible else None)
+    check(
+        ctx,
+        "Multi-agent conversation",
+        all_sent and all_visible,
+        error="Not all agents' messages visible" if not all_visible else None,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 8: Knowledge Graph (CFN-compatible endpoints on Mycelium)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_ioc_cfn(ctx: TestContext):
     """Test CFN knowledge graph integration via mycelium-backend.
@@ -1759,7 +1873,7 @@ def test_ioc_cfn(ctx: TestContext):
                 err_json = json.loads(body)
                 if "detail" in err_json:
                     error_msg += f": {err_json['detail']}"
-            except:
+            except Exception:
                 error_msg += f"\n{body[:200]}"
     else:
         try:
@@ -1771,10 +1885,11 @@ def test_ioc_cfn(ctx: TestContext):
             # e.g. "Successfully saved 3 nodes ... to graph 'graph_806811e1_7300_...'"
             if "graph_" in cfn_msg:
                 import re
+
                 match = re.search(r"graph_([a-f0-9_]+)", cfn_msg)
                 if match:
                     resolved_mas_id = match.group(1).replace("_", "-")
-        except:
+        except Exception:
             pass
     check(ctx, "Knowledge ingest (room_name)", status == 200 and error_msg is None, error=error_msg)
 
@@ -1789,9 +1904,7 @@ def test_ioc_cfn(ctx: TestContext):
     # ergonomics ("client only knows the room name") without depending on
     # the suspect fallback path.
     alt_room_name = f"{test_marker}-alt"
-    status, body = http_post(
-        f"{BACKEND_URL}/rooms", {"name": alt_room_name, "is_public": True}
-    )
+    status, body = http_post(f"{BACKEND_URL}/rooms", {"name": alt_room_name, "is_public": True})
     if status not in (200, 201):
         check(
             ctx,
@@ -1804,11 +1917,7 @@ def test_ioc_cfn(ctx: TestContext):
         ingest_data_alt = {
             "room_name": alt_room_name,
             "agent_id": "e2e-test-agent-alt",
-            "records": [
-                {
-                    "response": f"E2E alt-room test: {test_marker}. Temperature is warm today."
-                }
-            ],
+            "records": [{"response": f"E2E alt-room test: {test_marker}. Temperature is warm today."}],
         }
         status, body = http_post(ingest_url, ingest_data_alt, timeout=180)
         error_msg = None
@@ -1819,7 +1928,7 @@ def test_ioc_cfn(ctx: TestContext):
                     err_json = json.loads(body)
                     if "detail" in err_json:
                         error_msg += f": {err_json['detail']}"
-                except:
+                except Exception:
                     error_msg += f"\n{body[:200]}"
         else:
             try:
@@ -1827,7 +1936,7 @@ def test_ioc_cfn(ctx: TestContext):
                 cfn_msg = resp.get("cfn_message", "")
                 if "error" in cfn_msg.lower() or "fail" in cfn_msg.lower():
                     error_msg = f"CFN error: {cfn_msg}"
-            except:
+            except Exception:
                 pass
         check(
             ctx,
@@ -1857,7 +1966,7 @@ def test_ioc_cfn(ctx: TestContext):
                 err_json = json.loads(body)
                 if "detail" in err_json:
                     error_msg += f": {err_json['detail']}"
-            except:
+            except Exception:
                 error_msg += f"\n{body[:200]}"
     check(ctx, "Knowledge query", status == 200, error=error_msg)
 
@@ -1866,9 +1975,10 @@ def test_ioc_cfn(ctx: TestContext):
 # Section 9: IOC/CFN Full Path (through ioc-cfn-svc)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_ioc_full_path(ctx: TestContext):
     print_section(9, "IOC/CFN full path")
-    
+
     if not ctx.env_info.get("cfn_mgmt_reachable"):
         check(ctx, "CFN mgmt plane reachable", False, skipped=True, skip_reason="CFN mgmt plane not reachable")
         check(ctx, "Memory provider registered", False, skipped=True, skip_reason="CFN mgmt plane not reachable")
@@ -1876,10 +1986,10 @@ def test_ioc_full_path(ctx: TestContext):
         check(ctx, "CFN has workspace assigned", False, skipped=True, skip_reason="CFN mgmt plane not reachable")
         check(ctx, "IOC MAS exists", False, skipped=True, skip_reason="CFN mgmt plane not reachable")
         return
-    
+
     # Check mgmt plane is reachable
     check(ctx, "CFN mgmt plane reachable", True)
-    
+
     # Check a memory provider is registered (cfn-svc registers as "ioc-memory-provider")
     status, body = http_get(f"{CFN_MGMT_URL}/api/memory-providers")
     providers = []
@@ -1887,13 +1997,17 @@ def test_ioc_full_path(ctx: TestContext):
         try:
             data = json.loads(body)
             providers = [p.get("memory_provider_name", p.get("name", "")) for p in data.get("providers", [])]
-        except:
+        except Exception:
             pass
     # Accept either "mycelium" or "ioc-memory-provider" as valid provider names
     provider_registered = any(p in ["mycelium", "ioc-memory-provider"] for p in providers)
-    check(ctx, "Memory provider registered", provider_registered,
-          error=f"No valid memory provider in: {providers}" if not provider_registered else None)
-    
+    check(
+        ctx,
+        "Memory provider registered",
+        provider_registered,
+        error=f"No valid memory provider in: {providers}" if not provider_registered else None,
+    )
+
     # Check IOC workspace exists
     status, body = http_get(f"{CFN_MGMT_URL}/api/workspaces")
     ioc_workspace_id = None
@@ -1905,9 +2019,9 @@ def test_ioc_full_path(ctx: TestContext):
             if workspaces:
                 ioc_workspace_id = workspaces[0].get("id")
                 ioc_workspace_cfn_id = workspaces[0].get("cfn_id")
-        except:
+        except Exception:
             pass
-    
+
     if ioc_workspace_id:
         check(ctx, "IOC workspace exists", True)
         ctx.env_info["ioc_workspace_id"] = ioc_workspace_id
@@ -1916,14 +2030,18 @@ def test_ioc_full_path(ctx: TestContext):
         check(ctx, "CFN has workspace assigned", False, skipped=True, skip_reason="No IOC workspace")
         check(ctx, "IOC MAS exists", False, skipped=True, skip_reason="No IOC workspace")
         return
-    
+
     # Check if CFN has workspace assigned
     if ioc_workspace_cfn_id:
         check(ctx, "CFN has workspace assigned", True)
     else:
-        check(ctx, "CFN has workspace assigned", False, 
-              error="Workspace has no cfn_id - assign via: PUT /api/workspaces/{id} with cfn_id")
-    
+        check(
+            ctx,
+            "CFN has workspace assigned",
+            False,
+            error="Workspace has no cfn_id - assign via: PUT /api/workspaces/{id} with cfn_id",
+        )
+
     # Check if MAS exists in IOC workspace
     status, body = http_get(f"{CFN_MGMT_URL}/api/workspaces/{ioc_workspace_id}/multi-agentic-systems")
     ioc_mas_id = None
@@ -1934,19 +2052,24 @@ def test_ioc_full_path(ctx: TestContext):
             if systems:
                 ioc_mas_id = systems[0].get("id")
                 ctx.env_info["ioc_mas_id"] = ioc_mas_id
-        except:
+        except Exception:
             pass
-    
+
     if ioc_mas_id:
         check(ctx, "IOC MAS exists", True)
     else:
-        check(ctx, "IOC MAS exists", False,
-              error="No MAS in IOC workspace - create via: POST /api/workspaces/{id}/multi-agentic-systems")
+        check(
+            ctx,
+            "IOC MAS exists",
+            False,
+            error="No MAS in IOC workspace - create via: POST /api/workspaces/{id}/multi-agentic-systems",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 10: IOC/CFN Negotiation Path (end-to-end via cfn-svc)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_ioc_negotiation_path(ctx: TestContext):
     """
@@ -1957,7 +2080,7 @@ def test_ioc_negotiation_path(ctx: TestContext):
     4. Backend takes CFN path, coordination_state: negotiating, coordination_tick messages fanned out to agents
     """
     print_section(10, "IOC/CFN negotiation path (via cfn-svc)")
-    
+
     skip_all = [
         "CFN-svc registered with mgmt plane",
         "CFN-svc status: online",
@@ -1967,16 +2090,15 @@ def test_ioc_negotiation_path(ctx: TestContext):
         "Options generated (LLM called)",
         "Coordination tick fanned to agents",
     ]
-    
+
     if not ctx.env_info.get("cfn_svc_reachable"):
         for name in skip_all:
             check(ctx, name, False, skipped=True, skip_reason="CFN-svc not reachable")
         return
-    
+
     # 1. Check cfn-svc registered with management plane
     status, body = http_get(f"{CFN_MGMT_URL}/api/cognition-fabric-nodes")
     cfn_registered = False
-    cfn_id = None
     cfn_status_val = None
     if status == 200:
         try:
@@ -1985,48 +2107,58 @@ def test_ioc_negotiation_path(ctx: TestContext):
             for node in nodes:
                 if "mycelium" in node.get("cfn_name", "").lower():
                     cfn_registered = True
-                    cfn_id = node.get("cfn_id")
+                    node.get("cfn_id")
                     cfn_status_val = node.get("status", "unknown")
                     break
-        except:
+        except Exception:
             pass
-    check(ctx, "CFN-svc registered with mgmt plane", cfn_registered,
-          error=f"No mycelium CFN found in nodes" if not cfn_registered else None)
-    
+    check(
+        ctx,
+        "CFN-svc registered with mgmt plane",
+        cfn_registered,
+        error="No mycelium CFN found in nodes" if not cfn_registered else None,
+    )
+
     # Check CFN status is online (not offline/degraded)
     cfn_online = cfn_status_val == "online"
-    check(ctx, "CFN-svc status: online", cfn_online,
-          error=f"CFN status is '{cfn_status_val}', expected 'online'" if not cfn_online else None)
-    
+    check(
+        ctx,
+        "CFN-svc status: online",
+        cfn_online,
+        error=f"CFN status is '{cfn_status_val}', expected 'online'" if not cfn_online else None,
+    )
+
     if not cfn_registered:
         for name in skip_all[2:]:
             check(ctx, name, False, skipped=True, skip_reason="CFN not registered")
         return
-    
+
     # Get workspace and MAS IDs from IOC
     ioc_workspace_id = ctx.env_info.get("ioc_workspace_id")
     ioc_mas_id = ctx.env_info.get("ioc_mas_id")
-    
+
     if not ioc_workspace_id or not ioc_mas_id:
         for name in skip_all[2:]:
             check(ctx, name, False, skipped=True, skip_reason="IOC workspace/MAS not configured")
         return
-    
+
     # Start a semantic negotiation session via CFN-svc
     # Uses: POST /api/workspaces/{workspace_id}/multi-agentic-systems/{mas_id}/semantic-negotiation/start
-    nego_url = f"{CFN_SVC_URL}/api/workspaces/{ioc_workspace_id}/multi-agentic-systems/{ioc_mas_id}/semantic-negotiation/start"
-    
+    nego_url = (
+        f"{CFN_SVC_URL}/api/workspaces/{ioc_workspace_id}/multi-agentic-systems/{ioc_mas_id}/semantic-negotiation/start"
+    )
+
     nego_session_id = f"cfn-nego-{uuid.uuid4().hex[:8]}"
     session_payload = {
         "session_id": nego_session_id,
         "content_text": "Agent-fast wants to deliver quickly with MVP approach. Agent-quality wants comprehensive testing and extended timeline. Find a balanced approach.",
         "agents": [
             {"id": "agent-fast", "name": "Fast Delivery Agent"},
-            {"id": "agent-quality", "name": "Quality Focus Agent"}
+            {"id": "agent-quality", "name": "Quality Focus Agent"},
         ],
-        "n_steps": 5
+        "n_steps": 5,
     }
-    
+
     # Use longer timeout — node-svc 0.1.6 added a `generate_options_with_memory`
     # path that fires a self-call to its own /shared-memories/query and waits
     # the full upstream 120s timeout before falling back to LLM-only. Total
@@ -2035,16 +2167,16 @@ def test_ioc_negotiation_path(ctx: TestContext):
     # the 120s self-call timeout + LLM-only fallback + node-svc queuing under
     # load (single uvicorn worker serializes everything on one event loop).
     status, body = http_post(nego_url, session_payload, timeout=240)
-    
+
     session_created = status in (200, 201, 202)
     error_msg = None
     response_data = {}
     if body:
         try:
             response_data = json.loads(body)
-        except:
+        except Exception:
             pass
-    
+
     if not session_created:
         error_msg = f"HTTP {status}"
         if response_data:
@@ -2054,33 +2186,45 @@ def test_ioc_negotiation_path(ctx: TestContext):
         elif body:
             error_msg += f": {body[:200]}"
     check(ctx, "Start semantic negotiation", session_created, error=error_msg)
-    
+
     if not session_created:
         print(f"    {DIM}Request URL: {nego_url}{RESET}")
         for name in skip_all[3:]:
             check(ctx, name, False, skipped=True, skip_reason="Negotiation start failed")
         return
-    
+
     # Check state from response - should be "initiated" or "negotiating"
     state = response_data.get("status", response_data.get("state", ""))
     valid_states = ("initiated", "negotiating", "in_progress", "running")
     is_valid_state = state.lower() in valid_states if state else False
-    check(ctx, "State: negotiating/initiated", is_valid_state,
-          error=f"State is '{state}', expected one of {valid_states}" if not is_valid_state else None)
-    
+    check(
+        ctx,
+        "State: negotiating/initiated",
+        is_valid_state,
+        error=f"State is '{state}', expected one of {valid_states}" if not is_valid_state else None,
+    )
+
     # Check issues discovered from agent intents
     issues = response_data.get("issues", [])
     has_issues = len(issues) >= 1
-    check(ctx, "Issues discovered from intents", has_issues,
-          error=f"No issues discovered (got {len(issues)})" if not has_issues else None)
-    
+    check(
+        ctx,
+        "Issues discovered from intents",
+        has_issues,
+        error=f"No issues discovered (got {len(issues)})" if not has_issues else None,
+    )
+
     # Check options were generated per issue (proves LLM was called)
     options_per_issue = response_data.get("options_per_issue", {})
     total_options = sum(len(opts) for opts in options_per_issue.values()) if options_per_issue else 0
     has_options = total_options >= 1
-    check(ctx, "Options generated (LLM called)", has_options,
-          error=f"No options generated (got {total_options})" if not has_options else None)
-    
+    check(
+        ctx,
+        "Options generated (LLM called)",
+        has_options,
+        error=f"No options generated (got {total_options})" if not has_options else None,
+    )
+
     # Check coordination tick message was created and has next_proposer_id (fanned out to agent)
     messages = response_data.get("messages", [])
     tick_fanned = False
@@ -2092,13 +2236,19 @@ def test_ioc_negotiation_path(ctx: TestContext):
                 tick_fanned = True
                 next_proposer = payload.get("next_proposer_id")
                 break
-    check(ctx, "Coordination tick fanned to agents", tick_fanned,
-          error="No coordination message with next_proposer_id found" if not tick_fanned else None)
-    
+    check(
+        ctx,
+        "Coordination tick fanned to agents",
+        tick_fanned,
+        error="No coordination message with next_proposer_id found" if not tick_fanned else None,
+    )
+
     # Print response summary
     print(f"    {DIM}Session ID: {nego_session_id}{RESET}")
     print(f"    {DIM}State: {state}{RESET}")
-    print(f"    {DIM}Issues discovered: {len(issues)} ({', '.join(issues[:3])}{'...' if len(issues) > 3 else ''}){RESET}")
+    print(
+        f"    {DIM}Issues discovered: {len(issues)} ({', '.join(issues[:3])}{'...' if len(issues) > 3 else ''}){RESET}"
+    )
     print(f"    {DIM}Options generated: {total_options}{RESET}")
     if next_proposer:
         print(f"    {DIM}Next proposer (tick target): {next_proposer}{RESET}")
@@ -2107,6 +2257,7 @@ def test_ioc_negotiation_path(ctx: TestContext):
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 11: End-to-End Shared Memory via CLI
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_shared_memory_cli_e2e(ctx: TestContext):
     """
@@ -2117,84 +2268,122 @@ def test_shared_memory_cli_e2e(ctx: TestContext):
     4. Memory persists across operations
     """
     print_section(11, "E2E: Shared memory via CLI")
-    
+
     # Create a dedicated E2E room
     e2e_room = f"e2e-memory-{uuid.uuid4().hex[:8]}"
-    
+
     rc, stdout, stderr = run_cmd(["mycelium", "room", "create", e2e_room])
     check(ctx, "Create E2E room", rc == 0, error=stderr if rc != 0 else None)
-    
+
     if rc != 0:
-        for name in ["Agent-alpha stores decision", "Agent-beta stores context",
-                     "Agent-alpha reads beta's memory", "Semantic search finds memories",
-                     "Memory persists after reindex"]:
+        for name in [
+            "Agent-alpha stores decision",
+            "Agent-beta stores context",
+            "Agent-alpha reads beta's memory",
+            "Semantic search finds memories",
+            "Memory persists after reindex",
+        ]:
             check(ctx, name, False, skipped=True, skip_reason="Room create failed")
         return
-    
+
     test_id = uuid.uuid4().hex[:8]
-    
+
     # 1. Agent-alpha stores a decision
     alpha_key = f"decisions/architecture-{test_id}"
-    alpha_content = "Decided to use PostgreSQL with pgvector for semantic search. Rejected Redis due to lack of vector support."
-    
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", e2e_room,
-        "--handle", "agent-alpha",
-        alpha_key,
-        alpha_content,
-    ])
-    check(ctx, "Agent-alpha stores decision", rc == 0,
-          error=stderr.strip() if rc != 0 else None)
-    
+    alpha_content = (
+        "Decided to use PostgreSQL with pgvector for semantic search. Rejected Redis due to lack of vector support."
+    )
+
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            e2e_room,
+            "--handle",
+            "agent-alpha",
+            alpha_key,
+            alpha_content,
+        ]
+    )
+    check(ctx, "Agent-alpha stores decision", rc == 0, error=stderr.strip() if rc != 0 else None)
+
     # 2. Agent-beta stores related context
     beta_key = f"context/requirements-{test_id}"
     beta_content = "System requires sub-100ms semantic search latency. Must support 10M+ vectors. PostgreSQL with pgvector meets these requirements."
-    
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", e2e_room,
-        "--handle", "agent-beta",
-        beta_key,
-        beta_content,
-    ])
-    check(ctx, "Agent-beta stores context", rc == 0,
-          error=stderr.strip() if rc != 0 else None)
-    
+
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            e2e_room,
+            "--handle",
+            "agent-beta",
+            beta_key,
+            beta_content,
+        ]
+    )
+    check(ctx, "Agent-beta stores context", rc == 0, error=stderr.strip() if rc != 0 else None)
+
     # 3. Agent-alpha can read beta's memory (shared visibility)
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "get",
-        "--room", e2e_room,
-        beta_key,
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "get",
+            "--room",
+            e2e_room,
+            beta_key,
+        ]
+    )
     can_read_other = rc == 0 and "pgvector" in stdout
-    check(ctx, "Agent-alpha reads beta's memory", can_read_other,
-          error="Memory not visible or content mismatch" if not can_read_other else None)
-    
+    check(
+        ctx,
+        "Agent-alpha reads beta's memory",
+        can_read_other,
+        error="Memory not visible or content mismatch" if not can_read_other else None,
+    )
+
     # 4. Semantic search finds related memories
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "search",
-        "--room", e2e_room,
-        "vector database decision",
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "search",
+            "--room",
+            e2e_room,
+            "vector database decision",
+        ]
+    )
     search_found = rc == 0 and ("PostgreSQL" in stdout or "pgvector" in stdout)
-    check(ctx, "Semantic search finds memories", search_found,
-          error="Search did not find relevant memories" if not search_found else None)
-    
+    check(
+        ctx,
+        "Semantic search finds memories",
+        search_found,
+        error="Search did not find relevant memories" if not search_found else None,
+    )
+
     # 5. Memory persists after reindex
     rc, _, _ = run_cmd(["mycelium", "memory", "reindex", "--room", e2e_room])
-    rc2, stdout, stderr = run_cmd([
-        "mycelium", "memory", "get",
-        "--room", e2e_room,
-        alpha_key,
-    ])
+    rc2, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "get",
+            "--room",
+            e2e_room,
+            alpha_key,
+        ]
+    )
     persists = rc == 0 and rc2 == 0 and "PostgreSQL" in stdout
-    check(ctx, "Memory persists after reindex", persists,
-          error="Memory lost after reindex" if not persists else None)
-    
+    check(ctx, "Memory persists after reindex", persists, error="Memory lost after reindex" if not persists else None)
+
     print(f"    {DIM}E2E room: {e2e_room}{RESET}")
     print(f"    {DIM}Test memories: {alpha_key}, {beta_key}{RESET}")
-    
+
     # Cleanup
     run_cmd(["mycelium", "room", "delete", e2e_room, "--force"])
 
@@ -2202,6 +2391,7 @@ def test_shared_memory_cli_e2e(ctx: TestContext):
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 12: End-to-End Consensus Negotiation via CLI
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_consensus_cli_e2e(ctx: TestContext):
     """
@@ -2213,92 +2403,141 @@ def test_consensus_cli_e2e(ctx: TestContext):
     5. Synthesis can summarize the negotiation state
     """
     print_section(12, "E2E: Consensus negotiation via CLI")
-    
+
     # Create a dedicated negotiation room
     nego_room = f"e2e-consensus-{uuid.uuid4().hex[:8]}"
     register_room(ctx, nego_room)
-    
+
     rc, stdout, stderr = run_cmd(["mycelium", "room", "create", nego_room])
     check(ctx, "Create negotiation room", rc == 0, error=stderr if rc != 0 else None)
-    
+
     if rc != 0:
-        for name in ["Agent-alpha joins with position", "Agent-beta joins with position",
-                     "Positions visible in shared memory", "Session tracks both agents",
-                     "Catchup shows negotiation state"]:
+        for name in [
+            "Agent-alpha joins with position",
+            "Agent-beta joins with position",
+            "Positions visible in shared memory",
+            "Session tracks both agents",
+            "Catchup shows negotiation state",
+        ]:
             check(ctx, name, False, skipped=True, skip_reason="Room create failed")
         return
-    
+
     # 1. Agent-alpha shares their position via memory
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", nego_room,
-        "--handle", "agent-alpha",
-        "positions/agent-alpha",
-        "I prefer Option A: Fast delivery with standard quality. Timeline is critical for our Q2 deadline.",
-    ])
-    check(ctx, "Agent-alpha joins with position", rc == 0,
-          error=stderr.strip() if rc != 0 else None)
-    
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-alpha",
+            "positions/agent-alpha",
+            "I prefer Option A: Fast delivery with standard quality. Timeline is critical for our Q2 deadline.",
+        ]
+    )
+    check(ctx, "Agent-alpha joins with position", rc == 0, error=stderr.strip() if rc != 0 else None)
+
     # 2. Agent-beta shares their position via memory
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "set",
-        "--room", nego_room,
-        "--handle", "agent-beta",
-        "positions/agent-beta",
-        "I prefer Option B: Premium quality with extended timeline. Quality is non-negotiable for our brand.",
-    ])
-    check(ctx, "Agent-beta joins with position", rc == 0,
-          error=stderr.strip() if rc != 0 else None)
-    
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "set",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-beta",
+            "positions/agent-beta",
+            "I prefer Option B: Premium quality with extended timeline. Quality is non-negotiable for our brand.",
+        ]
+    )
+    check(ctx, "Agent-beta joins with position", rc == 0, error=stderr.strip() if rc != 0 else None)
+
     # 3. Verify both positions are visible in shared memory
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "memory", "ls",
-        "--room", nego_room,
-        "positions",
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "memory",
+            "ls",
+            "--room",
+            nego_room,
+            "positions",
+        ]
+    )
     both_visible = rc == 0 and "agent-alpha" in stdout and "agent-beta" in stdout
-    check(ctx, "Positions visible in shared memory", both_visible,
-          error="One or both positions not visible" if not both_visible else None)
-    
+    check(
+        ctx,
+        "Positions visible in shared memory",
+        both_visible,
+        error="One or both positions not visible" if not both_visible else None,
+    )
+
     # 4. Create a session and have both agents join
-    rc, stdout, stderr = run_cmd([
-        "mycelium", "session", "create",
-        "--room", nego_room,
-    ])
+    rc, stdout, stderr = run_cmd(
+        [
+            "mycelium",
+            "session",
+            "create",
+            "--room",
+            nego_room,
+        ]
+    )
     session_created = rc == 0
-    check(ctx, "Session tracks both agents", session_created,
-          error=stderr.strip() if rc != 0 else None)
-    
+    check(ctx, "Session tracks both agents", session_created, error=stderr.strip() if rc != 0 else None)
+
     if session_created:
         # Both agents join the session
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", "agent-alpha",
-            "--message", "Ready to negotiate. My priority is timeline.",
-        ])
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", "agent-beta",
-            "--message", "Ready to negotiate. My priority is quality.",
-        ])
-    
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                "agent-alpha",
+                "--message",
+                "Ready to negotiate. My priority is timeline.",
+            ]
+        )
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                "agent-beta",
+                "--message",
+                "Ready to negotiate. My priority is quality.",
+            ]
+        )
+
     # 5. Catchup should show the negotiation state
     if ctx.skip_llm_tests:
-        check(ctx, "Catchup shows negotiation state", False, 
-              skipped=True, skip_reason="LLM not available")
+        check(ctx, "Catchup shows negotiation state", False, skipped=True, skip_reason="LLM not available")
     else:
-        rc, stdout, stderr = run_cmd([
-            "mycelium", "catchup",
-            "--room", nego_room,
-        ], timeout=60)
+        rc, stdout, stderr = run_cmd(
+            [
+                "mycelium",
+                "catchup",
+                "--room",
+                nego_room,
+            ],
+            timeout=60,
+        )
         catchup_ok = rc == 0 and len(stdout) > 50
-        check(ctx, "Catchup shows negotiation state", catchup_ok,
-              error=stderr.strip() if rc != 0 else "Empty catchup" if not catchup_ok else None)
-    
+        check(
+            ctx,
+            "Catchup shows negotiation state",
+            catchup_ok,
+            error=stderr.strip() if rc != 0 else "Empty catchup" if not catchup_ok else None,
+        )
+
     print(f"    {DIM}Negotiation room: {nego_room}{RESET}")
-    
+
     # Cleanup
     run_cmd(["mycelium", "room", "delete", nego_room, "--force"])
 
@@ -2306,6 +2545,7 @@ def test_consensus_cli_e2e(ctx: TestContext):
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 13: E2E sync negotiation via CLI (tick → accept → consensus)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_sync_negotiation_cli_e2e(ctx: TestContext):
     """
@@ -2352,9 +2592,15 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
     room_mas_id = room_info.get("mas_id") if room_info else None
     room_workspace_id = room_info.get("workspace_id") if room_info else None
     ioc_path_ok = bool(room_mas_id and room_workspace_id)
-    check(ctx, "Room uses IOC path (has mas_id)", ioc_path_ok,
-          error=f"mas_id={room_mas_id!r}, workspace_id={room_workspace_id!r} — IOC not enabled?" if not ioc_path_ok else None)
-    
+    check(
+        ctx,
+        "Room uses IOC path (has mas_id)",
+        ioc_path_ok,
+        error=f"mas_id={room_mas_id!r}, workspace_id={room_workspace_id!r} — IOC not enabled?"
+        if not ioc_path_ok
+        else None,
+    )
+
     if not ioc_path_ok:
         for name in skip_names[2:]:
             check(ctx, name, False, skipped=True, skip_reason="IOC path not configured")
@@ -2372,18 +2618,32 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
 
     session_room = _parse_session_room(stdout, nego_room)
 
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-alpha",
-        "--message", "I want fast shipping and minimal scope.",
-    ])
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-beta",
-        "--message", "I want premium quality and a flexible timeline.",
-    ])
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-alpha",
+            "--message",
+            "I want fast shipping and minimal scope.",
+        ]
+    )
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-beta",
+            "--message",
+            "I want premium quality and a flexible timeline.",
+        ]
+    )
 
     if not session_room:
         for _attempt in range(20):
@@ -2391,8 +2651,12 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
             session_room = cli_find_session_room(nego_room)
             if session_room:
                 break
-    check(ctx, "Session room resolved (CLI)", session_room is not None,
-          error="Could not find session child room under namespace" if not session_room else None)
+    check(
+        ctx,
+        "Session room resolved (CLI)",
+        session_room is not None,
+        error="Could not find session child room under namespace" if not session_room else None,
+    )
     if not session_room:
         for name in skip_names[4:]:
             check(ctx, name, False, skipped=True, skip_reason="No session room")
@@ -2408,8 +2672,12 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
             tick_seen = True
             break
         time.sleep(5)
-    check(ctx, "coordination_tick received", tick_seen,
-          error="No coordination_tick within 240s — check backend/CFN/LLM" if not tick_seen else None)
+    check(
+        ctx,
+        "coordination_tick received",
+        tick_seen,
+        error="No coordination_tick within 240s — check backend/CFN/LLM" if not tick_seen else None,
+    )
     if not tick_seen:
         dump_negotiation_debug_info(nego_room, session_room, None, "No tick received")
         for name in skip_names[5:]:
@@ -2417,20 +2685,36 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
         run_cmd(["mycelium", "room", "delete", nego_room, "--force"])
         return
 
-    rc, _, stderr = run_cmd([
-        "mycelium", "negotiate", "respond", "accept",
-        "--room", session_room,
-        "--handle", "agent-alpha",
-    ], timeout=120)
+    rc, _, stderr = run_cmd(
+        [
+            "mycelium",
+            "negotiate",
+            "respond",
+            "accept",
+            "--room",
+            session_room,
+            "--handle",
+            "agent-alpha",
+        ],
+        timeout=120,
+    )
     check(ctx, "agent-alpha accept", rc == 0, error=stderr.strip() if rc != 0 else None)
 
     time.sleep(2)
 
-    rc, _, stderr = run_cmd([
-        "mycelium", "negotiate", "respond", "accept",
-        "--room", session_room,
-        "--handle", "agent-beta",
-    ], timeout=120)
+    rc, _, stderr = run_cmd(
+        [
+            "mycelium",
+            "negotiate",
+            "respond",
+            "accept",
+            "--room",
+            session_room,
+            "--handle",
+            "agent-beta",
+        ],
+        timeout=120,
+    )
     check(ctx, "agent-beta accept", rc == 0, error=stderr.strip() if rc != 0 else None)
 
     # SKILL-compliant wait: per mycelium SKILL.md §"Structured Negotiation
@@ -2443,10 +2727,15 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
     # still catch consensus even if await times out.
     run_cmd(
         [
-            "mycelium", "session", "await",
-            "--room", session_room,
-            "--handle", "agent-alpha",
-            "--timeout", "30",
+            "mycelium",
+            "session",
+            "await",
+            "--room",
+            session_room,
+            "--handle",
+            "agent-alpha",
+            "--timeout",
+            "30",
         ],
         timeout=40,
     )
@@ -2468,14 +2757,22 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
             break
         time.sleep(5)
 
-    check(ctx, "coordination_consensus posted", consensus_seen,
-          error="No coordination_consensus within 240s after accepts" if not consensus_seen else None)
+    check(
+        ctx,
+        "coordination_consensus posted",
+        consensus_seen,
+        error="No coordination_consensus within 240s after accepts" if not consensus_seen else None,
+    )
 
     # Use CLI to check coordination_state (avoids HTTP)
     state = cli_get_coordination_state(session_room)
     complete_ok = state == "complete"
-    check(ctx, "coordination_state complete (CLI)", complete_ok,
-          error=f"Expected coordination_state=complete, got {state!r}" if not complete_ok else None)
+    check(
+        ctx,
+        "coordination_state complete (CLI)",
+        complete_ok,
+        error=f"Expected coordination_state=complete, got {state!r}" if not complete_ok else None,
+    )
 
     # Substantive outcomes (empty plan/assignments may indicate CFN response-shape mismatch)
     substantive = False
@@ -2501,26 +2798,31 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
             else None
         ),
     )
-    
+
     # Verify IOC path was taken by checking both backend and CFN logs
     backend_logs = capture_backend_logs(200)
     cfn_logs = capture_cfn_logs(100)
     ioc_indicators = check_ioc_path_in_logs(backend_logs, cfn_logs)
-    
+
     # IOC path is verified if: MAS was created OR CFN processed the request (LLM called)
     ioc_path_verified = (
-        ioc_indicators.get("cfn_mas_created", False) or
-        ioc_indicators.get("cfn_llm_called", False) or
-        ioc_indicators.get("coordination_tick_posted", False)
+        ioc_indicators.get("cfn_mas_created", False)
+        or ioc_indicators.get("cfn_llm_called", False)
+        or ioc_indicators.get("coordination_tick_posted", False)
     )
-    check(ctx, "IOC path verified in logs", ioc_path_verified,
-          error="No CFN/IOC indicators found in logs" if not ioc_path_verified else None)
-    
+    check(
+        ctx,
+        "IOC path verified in logs",
+        ioc_path_verified,
+        error="No CFN/IOC indicators found in logs" if not ioc_path_verified else None,
+    )
+
     # Dump debug info if any checks failed
     any_failed = not consensus_seen or not complete_ok or not substantive or not ioc_path_verified
     if any_failed:
-        dump_negotiation_debug_info(nego_room, session_room, consensus_content, 
-                                    f"state={state}, consensus_seen={consensus_seen}")
+        dump_negotiation_debug_info(
+            nego_room, session_room, consensus_content, f"state={state}, consensus_seen={consensus_seen}"
+        )
 
     print(f"    {DIM}Session room: {session_room}{RESET}")
 
@@ -2530,6 +2832,7 @@ def test_sync_negotiation_cli_e2e(ctx: TestContext):
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 15: Demo-script parity (watch + session await + propose/respond)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _parse_coordination_tick_payload(messages: list) -> Optional[dict]:
     """Return payload dict from latest coordination_tick message, or None."""
@@ -2614,16 +2917,22 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
         for name in skip_all:
             check(ctx, name, False, skipped=True, skip_reason=f"Room create failed: {stderr.strip()}")
         return
-    
+
     # Verify room is configured for IOC path using CLI (avoids HTTP)
     room_info = cli_get_room_info(nego_room)
     room_mas_id = room_info.get("mas_id") if room_info else None
     room_workspace_id = room_info.get("workspace_id") if room_info else None
-    
+
     ioc_path_ok = bool(room_mas_id and room_workspace_id)
-    check(ctx, "Room uses IOC path (CLI)", ioc_path_ok,
-          error=f"mas_id={room_mas_id!r}, workspace_id={room_workspace_id!r} — IOC not enabled?" if not ioc_path_ok else None)
-    
+    check(
+        ctx,
+        "Room uses IOC path (CLI)",
+        ioc_path_ok,
+        error=f"mas_id={room_mas_id!r}, workspace_id={room_workspace_id!r} — IOC not enabled?"
+        if not ioc_path_ok
+        else None,
+    )
+
     if not ioc_path_ok:
         for name in skip_all[1:]:
             check(ctx, name, False, skipped=True, skip_reason="IOC path not configured")
@@ -2646,18 +2955,32 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
 
     session_room = _parse_session_room(stdout, nego_room)
 
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-alpha",
-        "--message", "Prioritize integration — need mgmt plane wired before demo.",
-    ])
-    run_cmd([
-        "mycelium", "session", "join",
-        "--room", nego_room,
-        "--handle", "agent-beta",
-        "--message", "Focus on demo UX and polish — backend is solid enough.",
-    ])
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-alpha",
+            "--message",
+            "Prioritize integration — need mgmt plane wired before demo.",
+        ]
+    )
+    run_cmd(
+        [
+            "mycelium",
+            "session",
+            "join",
+            "--room",
+            nego_room,
+            "--handle",
+            "agent-beta",
+            "--message",
+            "Focus on demo UX and polish — backend is solid enough.",
+        ]
+    )
 
     if not session_room:
         for _ in range(20):
@@ -2665,10 +2988,14 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
             session_room = cli_find_session_room(nego_room)
             if session_room:
                 break
-    
-    check(ctx, "Session room resolved (CLI)", session_room is not None,
-          error="Could not find session child room" if not session_room else None)
-    
+
+    check(
+        ctx,
+        "Session room resolved (CLI)",
+        session_room is not None,
+        error="Could not find session child room" if not session_room else None,
+    )
+
     if not session_room:
         for name in skip_all[3:]:
             check(ctx, name, False, skipped=True, skip_reason="No session room")
@@ -2700,15 +3027,15 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
     if tick_seen and tick_payload is not None:
         issues = tick_payload.get("issues") or tick_payload.get("issue_options")
         has_keys = bool(issues) and (
-            (isinstance(issues, dict) and len(issues) > 0)
-            or (isinstance(issues, list) and len(issues) > 0)
+            (isinstance(issues, dict) and len(issues) > 0) or (isinstance(issues, list) and len(issues) > 0)
         )
         check(
             ctx,
             "tick payload carries canonical issue keys",
             has_keys,
             error=f"tick payload lacks issues/issue_options: keys={list(tick_payload.keys())}"
-            if not has_keys else None,
+            if not has_keys
+            else None,
         )
 
     if not tick_seen:
@@ -2878,7 +3205,7 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
         consensus_reached,
         error="No consensus after await loop — negotiation may need more rounds" if not consensus_reached else None,
     )
-    
+
     # Verify the consensus has substantive content (not empty/broken)
     consensus_content: Optional[dict] = None
     if consensus_reached and session_room:
@@ -2890,7 +3217,7 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
                 except (json.JSONDecodeError, TypeError):
                     pass
                 break
-    
+
     substantive = False
     if consensus_content:
         plan = consensus_content.get("plan")
@@ -2903,7 +3230,7 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
             elif isinstance(plan, str) and plan.strip() and plan.strip() not in ("[]", ""):
                 if "failed" not in plan.lower() and "error" not in plan.lower():
                     substantive = True
-    
+
     check(
         ctx,
         "Consensus has substantive agreement",
@@ -2916,27 +3243,33 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
             else None
         ),
     )
-    
+
     # Verify IOC path was taken by checking both backend and CFN logs
     backend_logs = capture_backend_logs(200)
     cfn_logs = capture_cfn_logs(100)
     ioc_indicators = check_ioc_path_in_logs(backend_logs, cfn_logs)
-    
+
     # IOC path is verified if: MAS was created OR CFN processed the request (LLM called)
     ioc_path_verified = (
-        ioc_indicators.get("cfn_mas_created", False) or
-        ioc_indicators.get("cfn_llm_called", False) or
-        ioc_indicators.get("coordination_tick_posted", False)
+        ioc_indicators.get("cfn_mas_created", False)
+        or ioc_indicators.get("cfn_llm_called", False)
+        or ioc_indicators.get("coordination_tick_posted", False)
     )
-    check(ctx, "IOC path verified in logs", ioc_path_verified,
-          error="No CFN/IOC indicators found in logs" if not ioc_path_verified else None)
-    
+    check(
+        ctx,
+        "IOC path verified in logs",
+        ioc_path_verified,
+        error="No CFN/IOC indicators found in logs" if not ioc_path_verified else None,
+    )
+
     # Dump debug info if any critical checks failed
     any_failed = not consensus_reached or not substantive or not ioc_path_verified
     if any_failed:
         dump_negotiation_debug_info(
-            nego_room, session_room, consensus_content,
-            f"consensus_reached={consensus_reached}, substantive={substantive}, ioc_verified={ioc_path_verified}"
+            nego_room,
+            session_room,
+            consensus_content,
+            f"consensus_reached={consensus_reached}, substantive={substantive}, ioc_verified={ioc_path_verified}",
         )
 
     print(f"    {DIM}Demo-script room: {nego_room}{RESET}")
@@ -2947,11 +3280,12 @@ def test_demo_script_negotiation_coverage(ctx: TestContext):
 # Section 16: Three-Agent Negotiation (scaling beyond 2 parties)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_three_agent_negotiation(ctx: TestContext):
     """
     Three agents with different priorities must reach consensus.
     Tests that negotiation scales beyond bilateral agreements.
-    
+
     Scenario: Software release planning
     - Agent-speed: wants fast release, minimal testing
     - Agent-quality: wants comprehensive testing, delayed release
@@ -2961,15 +3295,24 @@ def test_three_agent_negotiation(ctx: TestContext):
 
     # Define agents with their biases and positions
     agents_config = [
-        ("agent-speed", "Speed bias", "Release ASAP with minimal testing. Speed to market is critical. We can hotfix issues later."),
-        ("agent-quality", "Quality bias", "Comprehensive testing required before release. Quality issues damage reputation. Delay is acceptable."),
-        ("agent-cost", "Cost bias", "Minimize resource usage. Staged rollout to reduce risk. Balance speed and quality within budget."),
+        (
+            "agent-speed",
+            "Speed bias",
+            "Release ASAP with minimal testing. Speed to market is critical. We can hotfix issues later.",
+        ),
+        (
+            "agent-quality",
+            "Quality bias",
+            "Comprehensive testing required before release. Quality issues damage reputation. Delay is acceptable.",
+        ),
+        (
+            "agent-cost",
+            "Cost bias",
+            "Minimize resource usage. Staged rollout to reduce risk. Balance speed and quality within budget.",
+        ),
     ]
-    
-    print_convergence_header(
-        "Software Release Planning",
-        agents_config
-    )
+
+    print_convergence_header("Software Release Planning", agents_config)
 
     skip_names = [
         "Create three-agent room",
@@ -3001,8 +3344,7 @@ def test_three_agent_negotiation(ctx: TestContext):
 
     room_info = cli_get_room_info(nego_room)
     ioc_path_ok = bool(room_info and room_info.get("mas_id") and room_info.get("workspace_id"))
-    check(ctx, "Room uses IOC path", ioc_path_ok,
-          error="IOC not configured" if not ioc_path_ok else None)
+    check(ctx, "Room uses IOC path", ioc_path_ok, error="IOC not configured" if not ioc_path_ok else None)
     if not ioc_path_ok:
         for name in skip_names[2:]:
             check(ctx, name, False, skipped=True, skip_reason="IOC not configured")
@@ -3020,13 +3362,20 @@ def test_three_agent_negotiation(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
-    
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
+
     check(ctx, "All three agents joined", True)
 
     if not session_room:
@@ -3035,8 +3384,7 @@ def test_three_agent_negotiation(ctx: TestContext):
             session_room = cli_find_session_room(nego_room)
             if session_room:
                 break
-    check(ctx, "Session room resolved", session_room is not None,
-          error="No session room" if not session_room else None)
+    check(ctx, "Session room resolved", session_room is not None, error="No session room" if not session_room else None)
     if not session_room:
         for name in skip_names[5:]:
             check(ctx, name, False, skipped=True, skip_reason="No session room")
@@ -3051,8 +3399,7 @@ def test_three_agent_negotiation(ctx: TestContext):
             tick_seen = True
             break
         time.sleep(5)
-    check(ctx, "coordination_tick received", tick_seen,
-          error="No tick within 240s" if not tick_seen else None)
+    check(ctx, "coordination_tick received", tick_seen, error="No tick within 240s" if not tick_seen else None)
     if not tick_seen:
         dump_negotiation_debug_info(nego_room, session_room, None, "No tick for 3-agent")
         for name in skip_names[6:]:
@@ -3063,11 +3410,19 @@ def test_three_agent_negotiation(ctx: TestContext):
     # All agents respond accept
     all_responded = True
     for handle, _, _ in agents_config:
-        rc, _, _ = run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        rc, _, _ = run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         if rc != 0:
             all_responded = False
         time.sleep(1)
@@ -3087,9 +3442,13 @@ def test_three_agent_negotiation(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
-    check(ctx, "coordination_consensus posted", consensus_content is not None,
-          error="No consensus" if not consensus_content else None)
+
+    check(
+        ctx,
+        "coordination_consensus posted",
+        consensus_content is not None,
+        error="No consensus" if not consensus_content else None,
+    )
 
     # Verify consensus addresses multiple perspectives
     substantive = False
@@ -3099,16 +3458,19 @@ def test_three_agent_negotiation(ctx: TestContext):
         broken = consensus_content.get("broken", False)
         if not broken and (len(assignments) >= 2 or len(plan) > 50):
             substantive = True
-    check(ctx, "Consensus addresses all three perspectives", substantive,
-          error="Consensus too narrow or broken" if not substantive else None)
+    check(
+        ctx,
+        "Consensus addresses all three perspectives",
+        substantive,
+        error="Consensus too narrow or broken" if not substantive else None,
+    )
 
     # Verify IOC path
     backend_logs = capture_backend_logs(200)
     cfn_logs = capture_cfn_logs(100)
     ioc_indicators = check_ioc_path_in_logs(backend_logs, cfn_logs)
     ioc_verified = ioc_indicators.get("cfn_mas_created") or ioc_indicators.get("cfn_llm_called")
-    check(ctx, "IOC path verified", ioc_verified,
-          error="No IOC indicators" if not ioc_verified else None)
+    check(ctx, "IOC path verified", ioc_verified, error="No IOC indicators" if not ioc_verified else None)
 
     # Print convergence result
     print_convergence_result(consensus_content, substantive)
@@ -3124,11 +3486,12 @@ def test_three_agent_negotiation(ctx: TestContext):
 # Section 17: Technical Architecture Decision
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_architecture_decision(ctx: TestContext):
     """
     Agents negotiate a technical architecture decision.
     Tests domain-specific negotiation with technical trade-offs.
-    
+
     Scenario: Database selection for new microservice
     - Agent-postgres: advocates for PostgreSQL (reliability, SQL)
     - Agent-mongo: advocates for MongoDB (flexibility, schema-less)
@@ -3136,12 +3499,18 @@ def test_architecture_decision(ctx: TestContext):
     print_section(17, "Architecture decision (database selection)")
 
     agents_config = [
-        ("agent-postgres", "PostgreSQL advocate", 
-         "PostgreSQL is the right choice: ACID compliance, mature ecosystem, pgvector for embeddings, JSON support for flexibility. We need reliability for financial data."),
-        ("agent-mongo", "MongoDB advocate", 
-         "MongoDB fits better: schema flexibility for evolving requirements, native document model matches our API, horizontal scaling built-in. Development velocity matters more than strict consistency."),
+        (
+            "agent-postgres",
+            "PostgreSQL advocate",
+            "PostgreSQL is the right choice: ACID compliance, mature ecosystem, pgvector for embeddings, JSON support for flexibility. We need reliability for financial data.",
+        ),
+        (
+            "agent-mongo",
+            "MongoDB advocate",
+            "MongoDB fits better: schema flexibility for evolving requirements, native document model matches our API, horizontal scaling built-in. Development velocity matters more than strict consistency.",
+        ),
     ]
-    
+
     print_convergence_header("Database Selection for Microservice", agents_config)
 
     skip_names = [
@@ -3172,8 +3541,7 @@ def test_architecture_decision(ctx: TestContext):
 
     room_info = cli_get_room_info(nego_room)
     ioc_path_ok = bool(room_info and room_info.get("mas_id"))
-    check(ctx, "Room uses IOC path", ioc_path_ok,
-          error="IOC not configured" if not ioc_path_ok else None)
+    check(ctx, "Room uses IOC path", ioc_path_ok, error="IOC not configured" if not ioc_path_ok else None)
     if not ioc_path_ok:
         for name in skip_names[2:]:
             check(ctx, name, False, skipped=True, skip_reason="IOC not configured")
@@ -3191,12 +3559,19 @@ def test_architecture_decision(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
     check(ctx, "Agents joined with technical positions", True)
 
     if not session_room:
@@ -3214,8 +3589,7 @@ def test_architecture_decision(ctx: TestContext):
                 tick_seen = True
                 break
             time.sleep(5)
-    check(ctx, "coordination_tick received", tick_seen,
-          error="No tick" if not tick_seen else None)
+    check(ctx, "coordination_tick received", tick_seen, error="No tick" if not tick_seen else None)
     if not tick_seen or not session_room:
         for name in skip_names[5:]:
             check(ctx, name, False, skipped=True, skip_reason="No tick")
@@ -3224,11 +3598,19 @@ def test_architecture_decision(ctx: TestContext):
 
     # Both agents accept
     for handle in ["agent-postgres", "agent-mongo"]:
-        run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         time.sleep(1)
     check(ctx, "Agents respond to proposal", True)
 
@@ -3245,9 +3627,13 @@ def test_architecture_decision(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
-    check(ctx, "coordination_consensus posted", consensus_content is not None,
-          error="No consensus" if not consensus_content else None)
+
+    check(
+        ctx,
+        "coordination_consensus posted",
+        consensus_content is not None,
+        error="No consensus" if not consensus_content else None,
+    )
 
     # Check for technical substance
     has_rationale = False
@@ -3258,8 +3644,12 @@ def test_architecture_decision(ctx: TestContext):
         tech_terms = ["postgres", "mongo", "database", "sql", "schema", "data", "consistency", "flexibility"]
         if any(term in plan for term in tech_terms) or len(assignments) > 0:
             has_rationale = True
-    check(ctx, "Consensus includes technical rationale", has_rationale,
-          error="No technical content in consensus" if not has_rationale else None)
+    check(
+        ctx,
+        "Consensus includes technical rationale",
+        has_rationale,
+        error="No technical content in consensus" if not has_rationale else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, has_rationale)
@@ -3275,11 +3665,12 @@ def test_architecture_decision(ctx: TestContext):
 # Section 18: Resource Allocation Negotiation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_resource_allocation(ctx: TestContext):
     """
     Agents negotiate resource allocation with competing demands.
     Tests multi-issue negotiation with trade-offs.
-    
+
     Scenario: Sprint capacity allocation
     - Agent-features: wants more dev time for new features
     - Agent-bugs: wants more time for bug fixes and tech debt
@@ -3287,12 +3678,18 @@ def test_resource_allocation(ctx: TestContext):
     print_section(18, "Resource allocation (sprint capacity)")
 
     agents_config = [
-        ("agent-features", "Feature delivery focus",
-         "We need 70% of sprint capacity for new features. Product roadmap commitments depend on it. Customer demos are scheduled. Feature delivery is our top KPI."),
-        ("agent-bugs", "Stability focus",
-         "We need 60% of sprint capacity for bug fixes and tech debt. System stability is degrading. Support tickets are increasing. Technical debt is slowing us down."),
+        (
+            "agent-features",
+            "Feature delivery focus",
+            "We need 70% of sprint capacity for new features. Product roadmap commitments depend on it. Customer demos are scheduled. Feature delivery is our top KPI.",
+        ),
+        (
+            "agent-bugs",
+            "Stability focus",
+            "We need 60% of sprint capacity for bug fixes and tech debt. System stability is degrading. Support tickets are increasing. Technical debt is slowing us down.",
+        ),
     ]
-    
+
     print_convergence_header("Sprint Capacity Allocation", agents_config)
 
     skip_names = [
@@ -3341,12 +3738,19 @@ def test_resource_allocation(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
     check(ctx, "Agents joined with resource demands", True)
 
     if not session_room:
@@ -3372,11 +3776,19 @@ def test_resource_allocation(ctx: TestContext):
         return
 
     for handle in ["agent-features", "agent-bugs"]:
-        run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         time.sleep(1)
     check(ctx, "Agents respond", True)
 
@@ -3393,7 +3805,7 @@ def test_resource_allocation(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
+
     check(ctx, "coordination_consensus posted", consensus_content is not None)
 
     # Check for allocation substance
@@ -3404,8 +3816,12 @@ def test_resource_allocation(ctx: TestContext):
         alloc_terms = ["capacity", "sprint", "feature", "bug", "time", "resource", "allocat", "%", "percent"]
         if any(term in plan for term in alloc_terms) or len(assignments) > 0:
             has_allocation = True
-    check(ctx, "Consensus allocates resources", has_allocation,
-          error="No allocation in consensus" if not has_allocation else None)
+    check(
+        ctx,
+        "Consensus allocates resources",
+        has_allocation,
+        error="No allocation in consensus" if not has_allocation else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, has_allocation)
@@ -3421,11 +3837,12 @@ def test_resource_allocation(ctx: TestContext):
 # Section 19: Priority Negotiation with Asymmetric Stakes
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_asymmetric_stakes(ctx: TestContext):
     """
     One agent has strong preferences, another is flexible.
     Tests whether negotiation respects intensity of preferences.
-    
+
     Scenario: Deployment timing
     - Agent-critical: has hard deadline (customer contract)
     - Agent-flexible: prefers delay but can adapt
@@ -3433,12 +3850,18 @@ def test_asymmetric_stakes(ctx: TestContext):
     print_section(19, "Asymmetric stakes (deployment timing)")
 
     agents_config = [
-        ("agent-critical", "Hard deadline (contract)",
-         "MUST deploy by Friday. Customer contract requires it. $500K penalty for delay. This is non-negotiable - legal has confirmed the obligation."),
-        ("agent-flexible", "Prefers delay (flexible)",
-         "Would prefer to delay until next sprint for more testing. But I can work with an earlier date if we have a good rollback plan. Quality matters but I understand business constraints."),
+        (
+            "agent-critical",
+            "Hard deadline (contract)",
+            "MUST deploy by Friday. Customer contract requires it. $500K penalty for delay. This is non-negotiable - legal has confirmed the obligation.",
+        ),
+        (
+            "agent-flexible",
+            "Prefers delay (flexible)",
+            "Would prefer to delay until next sprint for more testing. But I can work with an earlier date if we have a good rollback plan. Quality matters but I understand business constraints.",
+        ),
     ]
-    
+
     print_convergence_header("Deployment Timing Decision", agents_config)
 
     skip_names = [
@@ -3487,12 +3910,19 @@ def test_asymmetric_stakes(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
     check(ctx, "Agents joined (one critical, one flexible)", True)
 
     if not session_room:
@@ -3518,11 +3948,19 @@ def test_asymmetric_stakes(ctx: TestContext):
         return
 
     for handle in ["agent-critical", "agent-flexible"]:
-        run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         time.sleep(1)
     check(ctx, "Agents respond", True)
 
@@ -3539,7 +3977,7 @@ def test_asymmetric_stakes(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
+
     check(ctx, "coordination_consensus posted", consensus_content is not None)
 
     # Check if consensus respects the critical constraint
@@ -3551,8 +3989,12 @@ def test_asymmetric_stakes(ctx: TestContext):
         critical_terms = ["friday", "deadline", "deploy", "contract", "scope", "reduce"]
         if any(term in plan for term in critical_terms) or len(assignments) > 0:
             respects_critical = True
-    check(ctx, "Consensus respects critical constraint", respects_critical,
-          error="Critical constraint not reflected" if not respects_critical else None)
+    check(
+        ctx,
+        "Consensus respects critical constraint",
+        respects_critical,
+        error="Critical constraint not reflected" if not respects_critical else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, respects_critical)
@@ -3568,33 +4010,40 @@ def test_asymmetric_stakes(ctx: TestContext):
 # Section 20: Negotiation with Pre-existing Context
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_preexisting_context(ctx: TestContext):
     """
     Room has existing memories before negotiation starts.
     Tests whether negotiation considers prior decisions.
-    
+
     Scenario: Feature planning with existing architecture decisions
     """
     print_section(20, "Pre-existing context (feature planning)")
 
     prior_decision = "DECISION: We standardized on PostgreSQL for all new services. All data must be stored in PostgreSQL, not MongoDB or other databases."
-    
+
     agents_config = [
-        ("agent-newfeature", "Wants new feature (must respect prior)",
-         "I want to add a caching layer to improve performance. We should use Redis or an in-memory store. The data schema is flexible."),
-        ("agent-reviewer", "Enforces prior decisions",
-         f"Remember our architecture decision: '{prior_decision}' Any new feature must be compatible. What's the plan for data persistence?"),
+        (
+            "agent-newfeature",
+            "Wants new feature (must respect prior)",
+            "I want to add a caching layer to improve performance. We should use Redis or an in-memory store. The data schema is flexible.",
+        ),
+        (
+            "agent-reviewer",
+            "Enforces prior decisions",
+            f"Remember our architecture decision: '{prior_decision}' Any new feature must be compatible. What's the plan for data persistence?",
+        ),
     ]
-    
+
     print(f"\n  {CYAN}╭─ Convergence Topic: Feature Planning with Prior Decisions{RESET}")
     print(f"  {CYAN}│{RESET}")
     print(f"  {CYAN}│ {BOLD}Prior Decision in Room Memory:{RESET}")
-    print(f"  {CYAN}│   {DIM}\"{prior_decision[:70]}...\"{RESET}")
+    print(f'  {CYAN}│   {DIM}"{prior_decision[:70]}..."{RESET}')
     print(f"  {CYAN}│{RESET}")
     for handle, bias, position in agents_config:
         print(f"  {CYAN}│ {BOLD}{handle}{RESET} {DIM}({bias}){RESET}")
         pos_display = position[:80] + "..." if len(position) > 80 else position
-        print(f"  {CYAN}│   {DIM}\"{pos_display}\"{RESET}")
+        print(f'  {CYAN}│   {DIM}"{pos_display}"{RESET}')
     print(f"  {CYAN}╰─{RESET}\n")
 
     skip_names = [
@@ -3635,17 +4084,28 @@ def test_preexisting_context(ctx: TestContext):
 
     # Store prior decisions BEFORE starting negotiation
     prior_decisions = [
-        ("decisions/database", "PostgreSQL selected for all persistent storage. Decision rationale: ACID compliance, pgvector support, team expertise."),
+        (
+            "decisions/database",
+            "PostgreSQL selected for all persistent storage. Decision rationale: ACID compliance, pgvector support, team expertise.",
+        ),
         ("decisions/api-style", "REST API with OpenAPI spec. GraphQL considered but rejected for simplicity."),
         ("context/constraints", "Budget: $50k/month cloud spend limit. Team: 4 engineers. Timeline: Q2 launch."),
     ]
     all_stored = True
     for key, value in prior_decisions:
-        rc, _, _ = run_cmd([
-            "mycelium", "memory", "set", key, value,
-            "--room", nego_room,
-            "--handle", "architect-agent",
-        ])
+        rc, _, _ = run_cmd(
+            [
+                "mycelium",
+                "memory",
+                "set",
+                key,
+                value,
+                "--room",
+                nego_room,
+                "--handle",
+                "architect-agent",
+            ]
+        )
         if rc != 0:
             all_stored = False
     check(ctx, "Prior decisions stored", all_stored)
@@ -3661,12 +4121,19 @@ def test_preexisting_context(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
     check(ctx, "Agents reference prior decisions", True)
 
     if not session_room:
@@ -3692,11 +4159,19 @@ def test_preexisting_context(ctx: TestContext):
         return
 
     for handle, _, _ in agents_config:
-        run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         time.sleep(1)
     check(ctx, "Agents respond", True)
 
@@ -3713,7 +4188,7 @@ def test_preexisting_context(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
+
     check(ctx, "coordination_consensus posted", consensus_content is not None)
 
     # Check if consensus is consistent with prior decisions
@@ -3726,8 +4201,12 @@ def test_preexisting_context(ctx: TestContext):
         has_contradiction = any(c in plan for c in contradictions)
         if not has_contradiction and (len(assignments) > 0 or len(plan) > 30):
             consistent = True
-    check(ctx, "Consensus consistent with prior decisions", consistent,
-          error="Consensus contradicts prior decisions" if not consistent else None)
+    check(
+        ctx,
+        "Consensus consistent with prior decisions",
+        consistent,
+        error="Consensus contradicts prior decisions" if not consistent else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, consistent)
@@ -3743,22 +4222,29 @@ def test_preexisting_context(ctx: TestContext):
 # Section 21: Feature Prioritization (Multi-Issue)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_feature_prioritization(ctx: TestContext):
     """
     Agents negotiate feature priorities with multiple dimensions.
     Tests multi-issue negotiation with logrolling potential.
-    
+
     Scenario: Quarterly roadmap prioritization
     """
     print_section(21, "Feature prioritization (quarterly roadmap)")
 
     agents_config = [
-        ("agent-sales", "Customer-facing features",
-         "Priority 1: Customer dashboard redesign. Priority 2: Mobile app. Priority 3: Analytics exports. These are what customers are asking for in every sales call."),
-        ("agent-engineering", "Technical foundations",
-         "Priority 1: API refactoring. Priority 2: Database optimization. Priority 3: CI/CD improvements. Without these, new features will be slow and buggy."),
+        (
+            "agent-sales",
+            "Customer-facing features",
+            "Priority 1: Customer dashboard redesign. Priority 2: Mobile app. Priority 3: Analytics exports. These are what customers are asking for in every sales call.",
+        ),
+        (
+            "agent-engineering",
+            "Technical foundations",
+            "Priority 1: API refactoring. Priority 2: Database optimization. Priority 3: CI/CD improvements. Without these, new features will be slow and buggy.",
+        ),
     ]
-    
+
     print_convergence_header("Quarterly Roadmap Prioritization", agents_config)
 
     skip_names = [
@@ -3807,12 +4293,19 @@ def test_feature_prioritization(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room)
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join",
-            "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
     check(ctx, "Agents joined with feature preferences", True)
 
     if not session_room:
@@ -3838,11 +4331,19 @@ def test_feature_prioritization(ctx: TestContext):
         return
 
     for handle, _, _ in agents_config:
-        run_cmd([
-            "mycelium", "negotiate", "respond", "accept",
-            "--room", session_room,
-            "--handle", handle,
-        ], timeout=120)
+        run_cmd(
+            [
+                "mycelium",
+                "negotiate",
+                "respond",
+                "accept",
+                "--room",
+                session_room,
+                "--handle",
+                handle,
+            ],
+            timeout=120,
+        )
         time.sleep(1)
     check(ctx, "Agents respond", True)
 
@@ -3859,7 +4360,7 @@ def test_feature_prioritization(ctx: TestContext):
         if consensus_content:
             break
         time.sleep(5)
-    
+
     check(ctx, "coordination_consensus posted", consensus_content is not None)
 
     # Check for priority rankings
@@ -3870,8 +4371,12 @@ def test_feature_prioritization(ctx: TestContext):
         priority_terms = ["priority", "first", "second", "crm", "mobile", "analytics", "dashboard", "1)", "2)"]
         if any(term in plan for term in priority_terms) or len(assignments) >= 2:
             has_priorities = True
-    check(ctx, "Consensus has priority rankings", has_priorities,
-          error="No priorities in consensus" if not has_priorities else None)
+    check(
+        ctx,
+        "Consensus has priority rankings",
+        has_priorities,
+        error="No priorities in consensus" if not has_priorities else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, has_priorities)
@@ -3887,6 +4392,7 @@ def test_feature_prioritization(ctx: TestContext):
 # Section 22: Consensus Stability (verify consensus persists)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_consensus_stability(ctx: TestContext):
     """
     After reaching consensus, verify it persists and new agents can see it.
@@ -3895,12 +4401,18 @@ def test_consensus_stability(ctx: TestContext):
     print_section(22, "Consensus stability (persistence check)")
 
     agents_config = [
-        ("agent-initiator", "Proposes direction",
-         "We should standardize on weekly standups at 10am. This ensures team alignment without disrupting deep work."),
-        ("agent-responder", "Evaluates proposal",
-         "I can work with 10am standups if we keep them under 15 minutes. Time-boxing is essential for productivity."),
+        (
+            "agent-initiator",
+            "Proposes direction",
+            "We should standardize on weekly standups at 10am. This ensures team alignment without disrupting deep work.",
+        ),
+        (
+            "agent-responder",
+            "Evaluates proposal",
+            "I can work with 10am standups if we keep them under 15 minutes. Time-boxing is essential for productivity.",
+        ),
     ]
-    
+
     print_convergence_header("Meeting Schedule Agreement (persistence test)", agents_config)
 
     skip_names = [
@@ -3941,11 +4453,19 @@ def test_consensus_stability(ctx: TestContext):
     session_room = _parse_session_room(stdout, nego_room) if rc == 0 else None
 
     for handle, _, message in agents_config:
-        run_cmd([
-            "mycelium", "session", "join", "--room", nego_room,
-            "--handle", handle,
-            "--message", message,
-        ])
+        run_cmd(
+            [
+                "mycelium",
+                "session",
+                "join",
+                "--room",
+                nego_room,
+                "--handle",
+                handle,
+                "--message",
+                message,
+            ]
+        )
 
     if not session_room:
         for _ in range(20):
@@ -3963,12 +4483,21 @@ def test_consensus_stability(ctx: TestContext):
             if any(m.get("message_type") == "coordination_tick" for m in msgs):
                 break
             time.sleep(5)
-        
+
         for handle, _, _ in agents_config:
-            run_cmd([
-                "mycelium", "negotiate", "respond", "accept",
-                "--room", session_room, "--handle", handle,
-            ], timeout=120)
+            run_cmd(
+                [
+                    "mycelium",
+                    "negotiate",
+                    "respond",
+                    "accept",
+                    "--room",
+                    session_room,
+                    "--handle",
+                    handle,
+                ],
+                timeout=120,
+            )
             time.sleep(1)
 
         for _ in range(48):
@@ -3985,8 +4514,12 @@ def test_consensus_stability(ctx: TestContext):
                 break
             time.sleep(5)
 
-    check(ctx, "Initial negotiation reaches consensus", consensus_reached,
-          error="No consensus" if not consensus_reached else None)
+    check(
+        ctx,
+        "Initial negotiation reaches consensus",
+        consensus_reached,
+        error="No consensus" if not consensus_reached else None,
+    )
     if not consensus_reached:
         for name in skip_names[3:]:
             check(ctx, name, False, skipped=True, skip_reason="No initial consensus")
@@ -3998,20 +4531,27 @@ def test_consensus_stability(ctx: TestContext):
     # Check catchup shows the agreement
     rc, stdout, _ = run_cmd(["mycelium", "catchup", "--room", nego_room], timeout=60)
     catchup_shows_agreement = rc == 0 and len(stdout) > 50
-    check(ctx, "Catchup shows agreement", catchup_shows_agreement,
-          error="Catchup empty or failed" if not catchup_shows_agreement else None)
+    check(
+        ctx,
+        "Catchup shows agreement",
+        catchup_shows_agreement,
+        error="Catchup empty or failed" if not catchup_shows_agreement else None,
+    )
 
     # Synthesize should include the consensus
     rc, stdout, _ = run_cmd(["mycelium", "synthesize", "--room", nego_room], timeout=60)
     synthesize_ok = rc == 0
-    check(ctx, "Synthesize includes consensus", synthesize_ok,
-          error="Synthesize failed" if not synthesize_ok else None)
+    check(ctx, "Synthesize includes consensus", synthesize_ok, error="Synthesize failed" if not synthesize_ok else None)
 
     # New agent joins and checks context
     rc, stdout, _ = run_cmd(["mycelium", "catchup", "--room", nego_room], timeout=60)
     new_agent_sees = rc == 0 and ("standup" in stdout.lower() or "meeting" in stdout.lower() or len(stdout) > 100)
-    check(ctx, "New agent sees prior agreement", new_agent_sees,
-          error="New agent catchup missing context" if not new_agent_sees else None)
+    check(
+        ctx,
+        "New agent sees prior agreement",
+        new_agent_sees,
+        error="New agent catchup missing context" if not new_agent_sees else None,
+    )
 
     # Print convergence result
     print_convergence_result(consensus_content, catchup_shows_agreement and new_agent_sees)
@@ -4027,9 +4567,10 @@ def test_consensus_stability(ctx: TestContext):
 # Section 23: Reindex (moved from 16)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_reindex(ctx: TestContext):
     print_section(23, "Reindex")
-    
+
     rc, stdout, stderr = run_cmd(["mycelium", "memory", "reindex", "--room", ctx.room_name])
     check(ctx, "Reindex room", rc == 0, error=stderr if rc != 0 else None)
 
@@ -4038,45 +4579,55 @@ def test_reindex(ctx: TestContext):
 # Section 24: OpenClaw Skill Verification
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_openclaw_mycelium_skill(ctx: TestContext):
     """
     Verify that the mycelium skill is functional in OpenClaw agents.
-    
+
     This test verifies that:
     1. The openclaw CLI can query skill status
     2. The mycelium binary is accessible to agents
     3. An agent can execute mycelium commands via the skill
     """
     print_section(24, "OpenClaw Mycelium Skill")
-    
+
     # Check 1: Verify openclaw CLI is available
     rc, stdout, stderr = run_cmd(["openclaw", "--version"])
     check(ctx, "OpenClaw CLI available", rc == 0, error=stderr if rc != 0 else None)
     if rc != 0:
         return  # Can't continue without openclaw
-    
+
     # Check 2: Verify mycelium skill is listed (regardless of "needs setup" status)
     rc, stdout, stderr = run_cmd(["openclaw", "skills", "list"])
     skill_listed = rc == 0 and "mycelium" in stdout
-    check(ctx, "Mycelium skill listed", skill_listed, 
-          error="Skill not found in 'openclaw skills list'" if not skill_listed else None)
-    
+    check(
+        ctx,
+        "Mycelium skill listed",
+        skill_listed,
+        error="Skill not found in 'openclaw skills list'" if not skill_listed else None,
+    )
+
     # Check 3: Verify mycelium binary is in approvals allowlist
     rc, stdout, stderr = run_cmd(["openclaw", "approvals", "allowlist", "list"])
     if rc == 0:
         mycelium_allowed = "mycelium" in stdout.lower()
-        check(ctx, "Mycelium in approvals allowlist", mycelium_allowed,
-              error="Add with: openclaw approvals allowlist add --agent '*' ~/.local/bin/mycelium" if not mycelium_allowed else None)
+        check(
+            ctx,
+            "Mycelium in approvals allowlist",
+            mycelium_allowed,
+            error="Add with: openclaw approvals allowlist add --agent '*' ~/.local/bin/mycelium"
+            if not mycelium_allowed
+            else None,
+        )
     else:
         # allowlist command may not exist in older versions
         check(ctx, "Mycelium in approvals allowlist", True, skip_reason="approvals allowlist not available")
-    
+
     # Check 4: Verify mycelium CLI works directly
     rc, stdout, stderr = run_cmd(["mycelium", "room", "ls", "--limit", "5"])
     mycelium_works = rc == 0
-    check(ctx, "Mycelium CLI functional", mycelium_works,
-          error=stderr if not mycelium_works else None)
-    
+    check(ctx, "Mycelium CLI functional", mycelium_works, error=stderr if not mycelium_works else None)
+
     # Check 5: Verify skill requirements declared in SKILL.md are met.
     #
     # The mycelium SKILL.md frontmatter declares two requirements:
@@ -4092,10 +4643,18 @@ def test_openclaw_mycelium_skill(ctx: TestContext):
     # only lists declared requirements.
     rc, stdout, stderr = run_cmd(["openclaw", "skills", "info", "mycelium"])
     if rc == 0:
-        check(ctx, "Skill binary requirement met", "Binaries:" in stdout and "mycelium" in stdout,
-              error="mycelium binary not found by OpenClaw")
-        check(ctx, "Skill config requirement met", "config.toml" in stdout,
-              error="~/.mycelium/config.toml requirement not reflected in skill info")
+        check(
+            ctx,
+            "Skill binary requirement met",
+            "Binaries:" in stdout and "mycelium" in stdout,
+            error="mycelium binary not found by OpenClaw",
+        )
+        check(
+            ctx,
+            "Skill config requirement met",
+            "config.toml" in stdout,
+            error="~/.mycelium/config.toml requirement not reflected in skill info",
+        )
     else:
         check(ctx, "Skill requirements check", False, error=stderr)
 
@@ -4103,13 +4662,13 @@ def test_openclaw_mycelium_skill(ctx: TestContext):
 def test_openclaw_agent_mycelium_execution(ctx: TestContext):
     """
     Verify that an OpenClaw agent can actually execute mycelium commands.
-    
+
     This test verifies the mycelium binary is in the agent's allowlist
     and can be invoked. For full agent execution tests, see the distributed
     E2E tests which use Matrix to trigger real agent responses.
     """
     print_section(25, "Agent Mycelium Execution")
-    
+
     # Check if gateway is running
     rc, stdout, stderr = run_cmd(["openclaw", "gateway", "status"])
     gateway_running = rc == 0 and "running" in stdout.lower()
@@ -4117,19 +4676,25 @@ def test_openclaw_agent_mycelium_execution(ctx: TestContext):
         check(ctx, "Gateway running", False, skip_reason="OpenClaw gateway not running")
         return
     check(ctx, "Gateway running", True)
-    
+
     # Check 1: Verify mycelium is in the approvals allowlist for execution
     rc, stdout, stderr = run_cmd(["openclaw", "approvals", "allowlist", "list"])
     if rc == 0:
         mycelium_allowed = "mycelium" in stdout.lower()
-        check(ctx, "Mycelium binary allowlisted for agents", mycelium_allowed,
-              error="Agents cannot execute mycelium without approval. Add with:\n"
-                    "  openclaw approvals allowlist add --agent '*' ~/.local/bin/mycelium" 
-              if not mycelium_allowed else None)
+        check(
+            ctx,
+            "Mycelium binary allowlisted for agents",
+            mycelium_allowed,
+            error="Agents cannot execute mycelium without approval. Add with:\n"
+            "  openclaw approvals allowlist add --agent '*' ~/.local/bin/mycelium"
+            if not mycelium_allowed
+            else None,
+        )
     else:
-        check(ctx, "Mycelium binary allowlisted for agents", True, 
-              skip_reason="approvals allowlist command not available")
-    
+        check(
+            ctx, "Mycelium binary allowlisted for agents", True, skip_reason="approvals allowlist command not available"
+        )
+
     # Check 2: Verify the gateway can resolve the backend URL.
     #
     # The bootstrap hook (mycelium-bootstrap/handler.js) resolves the URL
@@ -4151,6 +4716,7 @@ def test_openclaw_agent_mycelium_execution(ctx: TestContext):
                     sources.append("systemd override")
         if os.path.exists(config_json):
             import json as _json
+
             with open(config_json) as f:
                 cfg = _json.load(f)
             if (cfg.get("server") or {}).get("api_url"):
@@ -4177,45 +4743,55 @@ def test_openclaw_agent_mycelium_execution(ctx: TestContext):
             if not sources
             else None,
         )
-    
+
     # Check 3: Verify skill file exists and is readable
     skill_path = os.path.expanduser("~/.openclaw/workspace/skills/mycelium/SKILL.md")
     skill_exists = os.path.isfile(skill_path)
-    check(ctx, "Mycelium skill file exists", skill_exists,
-          error=f"Skill file not found at {skill_path}")
-    
+    check(ctx, "Mycelium skill file exists", skill_exists, error=f"Skill file not found at {skill_path}")
+
     # Check 4: Verify the agent can resolve mycelium in PATH
     # This simulates what the agent sandbox would do
     import shutil
+
     mycelium_path = shutil.which("mycelium")
-    check(ctx, "Mycelium binary in PATH", mycelium_path is not None,
-          error="mycelium not found in PATH. Install with:\n"
-                "  pip install mycelium-cli  # or\n"
-                "  brew install mycelium-io/tap/mycelium"
-          if not mycelium_path else None)
-    
+    check(
+        ctx,
+        "Mycelium binary in PATH",
+        mycelium_path is not None,
+        error="mycelium not found in PATH. Install with:\n"
+        "  pip install mycelium-cli  # or\n"
+        "  brew install mycelium-io/tap/mycelium"
+        if not mycelium_path
+        else None,
+    )
+
     if mycelium_path:
         log_info(f"Mycelium binary found at: {mycelium_path}")
-    
+
     # Check 5: Test that mycelium can connect to the backend (as agents would)
     rc, stdout, stderr = run_cmd(["mycelium", "room", "ls", "--limit", "1"])
     backend_reachable = rc == 0
-    check(ctx, "Mycelium can reach backend", backend_reachable,
-          error=f"mycelium cannot reach backend: {stderr}" if not backend_reachable else None)
+    check(
+        ctx,
+        "Mycelium can reach backend",
+        backend_reachable,
+        error=f"mycelium cannot reach backend: {stderr}" if not backend_reachable else None,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cleanup & Results
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def cleanup_stale_sessions(prefix: str = None, max_age_minutes: int = None) -> int:
     """
     Clean up stale negotiating sessions from the backend.
-    
+
     Args:
         prefix: Only clean sessions matching this prefix (e.g., "e2e-", "dist-e2e-")
         max_age_minutes: Only clean sessions older than this (None = all negotiating)
-    
+
     Returns:
         Number of sessions cleaned up.
     """
@@ -4224,27 +4800,28 @@ def cleanup_stale_sessions(prefix: str = None, max_age_minutes: int = None) -> i
         if status != 200:
             log_warning(f"Failed to fetch rooms for cleanup: {status}")
             return 0
-        
+
         rooms = json.loads(body)
         cleaned = 0
-        
+
         for room in rooms:
             name = room.get("name", "")
             state = room.get("coordination_state")
-            
+
             # Only clean negotiating/waiting sessions
             if state not in ("negotiating", "waiting"):
                 continue
-            
+
             # Filter by prefix if specified
             if prefix and not name.startswith(prefix):
                 continue
-            
+
             # Filter by age if specified
             if max_age_minutes:
                 created_at = room.get("created_at")
                 if created_at:
                     from datetime import datetime, timezone
+
                     try:
                         created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                         age = datetime.now(timezone.utc) - created
@@ -4252,7 +4829,7 @@ def cleanup_stale_sessions(prefix: str = None, max_age_minutes: int = None) -> i
                             continue
                     except (ValueError, TypeError):
                         pass
-            
+
             # Delete the session room
             encoded_name = urllib.parse.quote(name, safe="")
             del_status, _ = http_delete(f"{BACKEND_URL}/rooms/{encoded_name}")
@@ -4261,12 +4838,12 @@ def cleanup_stale_sessions(prefix: str = None, max_age_minutes: int = None) -> i
                 cleaned += 1
             else:
                 log_warning(f"Failed to clean up session {name}: HTTP {del_status}")
-        
+
         if cleaned > 0:
             log_info(f"Cleaned up {cleaned} stale session(s)")
-        
+
         return cleaned
-        
+
     except Exception as e:
         log_warning(f"Session cleanup failed: {e}")
         return 0
@@ -4306,8 +4883,12 @@ def _ssh_run(
 ) -> subprocess.CompletedProcess:
     """Run a shell snippet on `host` via ssh. Returns the CompletedProcess."""
     cmd = [
-        "ssh", "-i", ssh_key_expanded, *_SSH_OPTS,
-        f"{user}@{host}", remote_cmd,
+        "ssh",
+        "-i",
+        ssh_key_expanded,
+        *_SSH_OPTS,
+        f"{user}@{host}",
+        remote_cmd,
     ]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
@@ -4324,7 +4905,9 @@ def _count_openclaw_agents_local() -> int:
     try:
         result = subprocess.run(
             ["pgrep", "openclaw-agent"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode not in (0, 1):
             return 0
@@ -4333,16 +4916,16 @@ def _count_openclaw_agents_local() -> int:
         return 0
 
 
-def _count_openclaw_agents_remote(
-    host: str, ssh_key_expanded: str, user: str
-) -> int:
+def _count_openclaw_agents_remote(host: str, ssh_key_expanded: str, user: str) -> int:
     """
     Count running openclaw-agent processes on a remote host. -1 on ssh error.
     See _count_openclaw_agents_local for why we don't use `pgrep -f`.
     """
     try:
         result = _ssh_run(
-            host, ssh_key_expanded, user,
+            host,
+            ssh_key_expanded,
+            user,
             "pgrep openclaw-agent 2>/dev/null | wc -l",
             timeout=10,
         )
@@ -4394,9 +4977,7 @@ def wait_for_agents_idle(
         if include_local:
             counts["local"] = _count_openclaw_agents_local()
         for host in hosts:
-            counts[host] = _count_openclaw_agents_remote(
-                host, ssh_key_expanded, user
-            )
+            counts[host] = _count_openclaw_agents_remote(host, ssh_key_expanded, user)
         # -1 (ssh unreachable) counts as "idle" — we can't see it anyway.
         all_idle = all(c <= 0 for c in counts.values())
         if all_idle:
@@ -4436,9 +5017,7 @@ def cleanup_remote_agents(
 
     for host in hosts:
         try:
-            initial_count = _count_openclaw_agents_remote(
-                host, ssh_key_expanded, user
-            )
+            initial_count = _count_openclaw_agents_remote(host, ssh_key_expanded, user)
             if initial_count < 0:
                 log_warning(f"Could not reach {host} for agent cleanup")
                 results[host] = 0
@@ -4459,9 +5038,7 @@ def cleanup_remote_agents(
             while elapsed < wait_timeout and remaining > 0:
                 time.sleep(poll_interval)
                 elapsed += poll_interval
-                remaining = _count_openclaw_agents_remote(
-                    host, ssh_key_expanded, user
-                )
+                remaining = _count_openclaw_agents_remote(host, ssh_key_expanded, user)
                 if remaining < 0:
                     remaining = 0
                     break
@@ -4508,9 +5085,9 @@ def cleanup_distributed(
             os.environ.get("OCLW3_IP", "10.0.50.171"),
             os.environ.get("OCLW5_IP", "10.0.50.142"),
         ]
-    
+
     print(f"{DIM}Cleaning up distributed test environment...{RESET}")
-    
+
     # Step 1: Clean stale sessions from backend — only old ones (>10min)
     # to avoid interfering with concurrent runs.
     print(f"{DIM}  Cleaning stale backend sessions (>10min old)...{RESET}")
@@ -4518,7 +5095,7 @@ def cleanup_distributed(
     sessions_cleaned += cleanup_stale_sessions(prefix="dist-e2e-", max_age_minutes=10)
     if sessions_cleaned > 0:
         print(f"{DIM}  Cleaned {sessions_cleaned} stale session(s){RESET}")
-    
+
     # Step 2: Wait for local openclaw-agent turns to finish naturally.
     local_initial = _count_openclaw_agents_local()
     if local_initial > 0:
@@ -4551,10 +5128,7 @@ def cleanup_distributed(
 
     still_running = sum(1 for v in results.values() if v > 0)
     if still_running > 0:
-        print(
-            f"{DIM}  {still_running} host(s) still have running agents; "
-            f"see warnings above.{RESET}"
-        )
+        print(f"{DIM}  {still_running} host(s) still have running agents; see warnings above.{RESET}")
 
     print(f"{DIM}Distributed cleanup complete.{RESET}")
 
@@ -4563,7 +5137,7 @@ def cleanup(ctx: TestContext):
     print(f"\n{DIM}Cleaning up room {ctx.room_name}...{RESET}")
     log_info(f"Cleaning up room {ctx.room_name}")
     run_cmd(["mycelium", "room", "delete", ctx.room_name, "--force"])
-    
+
     # Clean up rooms owned by this run only — avoids nuking a concurrent run's
     # active sessions (root cause of the 404-mid-negotiation failures).
     if ctx._owned_rooms:
@@ -4580,19 +5154,19 @@ def cleanup(ctx: TestContext):
 
 def print_results(ctx: TestContext):
     print_section(24, "Results")
-    
+
     print(f"\n  Resource mode:   {ctx.env_info.get('resource_mode', 'unknown')}")
-    
+
     total = len(ctx.results)
     passed = sum(1 for r in ctx.results if r.passed)
     failed = sum(1 for r in ctx.results if not r.passed and not r.skipped)
     skipped = sum(1 for r in ctx.results if r.skipped)
-    
+
     print(f"\n  {failed}/{total} checks failed.")
     print(f"  {passed}/{total} checks passed.")
     if skipped:
         print(f"  {skipped}/{total} checks skipped.")
-    
+
     # Log summary to file
     log_info("=" * 60)
     log_info("TEST RUN SUMMARY")
@@ -4601,7 +5175,7 @@ def print_results(ctx: TestContext):
     log_info(f"Passed: {passed}")
     log_info(f"Failed: {failed}")
     log_info(f"Skipped: {skipped}")
-    
+
     failed_results = [r for r in ctx.results if not r.passed and not r.skipped]
     if failed_results:
         print(f"\n  {RED}Failed checks:{RESET}")
@@ -4614,7 +5188,7 @@ def print_results(ctx: TestContext):
                 for line in r.error.strip().split("\n")[:3]:
                     print(f"      {DIM}{line}{RESET}")
                     log_error(f"    {line}")
-    
+
     skipped_results = [r for r in ctx.results if r.skipped]
     if skipped_results:
         print(f"\n  {YELLOW}Skipped checks:{RESET}")
@@ -4626,14 +5200,14 @@ def print_results(ctx: TestContext):
             if r.skip_reason:
                 print(f"      {DIM}{r.skip_reason}{RESET}")
                 log_info(f"    Reason: {r.skip_reason}")
-    
+
     # Show log file path
     log_path = get_log_file_path()
     if log_path and LOG_ENABLED:
         print(f"\n  {CYAN}Log file:{RESET} {log_path}")
         log_info("")
         log_info(f"Test run completed. Result: {'PASS' if failed == 0 else 'FAIL'}")
-    
+
     return failed == 0
 
 
@@ -4641,9 +5215,9 @@ def main():
     # Generate unique room name
     room_suffix = str(int(time.time()))[-7:]
     room_name = f"{ROOM_PREFIX}-{room_suffix}"
-    
+
     ctx = TestContext(room_name=room_name)
-    
+
     try:
         detect_environment(ctx)
         test_room_lifecycle(ctx)
@@ -4661,10 +5235,10 @@ def main():
         test_sync_negotiation_cli_e2e(ctx)
         test_demo_script_negotiation_coverage(ctx)
         test_reindex(ctx)
-        
+
         success = print_results(ctx)
-        
+
     finally:
         cleanup(ctx)
-    
+
     sys.exit(0 if success else 1)
