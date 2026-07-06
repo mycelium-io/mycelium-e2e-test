@@ -91,12 +91,13 @@ RUN mkdir -p /openclaw /shared /etc/supervisor/conf.d \
 COPY --chown=spoke:spoke infra/scripts/spoke-entrypoint.sh /openclaw/entrypoint.sh
 COPY --chown=spoke:spoke infra/scripts/install-openclaw-skills.sh /openclaw/install-openclaw-skills.sh
 COPY --chown=spoke:spoke infra/scripts/patch-hermes-plugin.sh /openclaw/patch-hermes-plugin.sh
+COPY --chown=spoke:spoke infra/scripts/daemon-subscribe.sh /openclaw/daemon-subscribe.sh
 COPY --chown=spoke:spoke infra/scripts/install-openclaw-mycelium-plugin.sh /openclaw/install-openclaw-mycelium-plugin.sh
 COPY --chown=spoke:spoke infra/scripts/patch-openclaw-plugin.sh /openclaw/patch-openclaw-plugin.sh
 COPY --chown=spoke:spoke infra/scripts/restart-hermes-gateway.sh /openclaw/restart-hermes-gateway.sh
 COPY --chown=spoke:spoke infra/scripts/restart-openclaw-gateway.sh /openclaw/restart-openclaw-gateway.sh
 RUN chmod +x /openclaw/entrypoint.sh /openclaw/install-openclaw-skills.sh \
-    /openclaw/install-openclaw-mycelium-plugin.sh \
+    /openclaw/daemon-subscribe.sh /openclaw/install-openclaw-mycelium-plugin.sh \
     /openclaw/patch-hermes-plugin.sh /openclaw/patch-openclaw-plugin.sh \
     /openclaw/restart-hermes-gateway.sh /openclaw/restart-openclaw-gateway.sh
 

@@ -3,14 +3,14 @@
 
 set -euo pipefail
 
-if ! pgrep -f 'openclaw gateway run' >/dev/null 2>&1; then
+if ! pgrep -f 'openclaw gateway' >/dev/null 2>&1; then
     echo "[restart-openclaw-gateway] no running gateway — skipping"
     exit 0
 fi
 
-pkill -f 'openclaw gateway run' || true
+pkill -f 'openclaw gateway' || true
 sleep 2
-if pgrep -f 'openclaw gateway run' >/dev/null 2>&1; then
+if pgrep -f 'openclaw gateway' >/dev/null 2>&1; then
     echo "[restart-openclaw-gateway] gateway still running after pkill"
 else
     echo "[restart-openclaw-gateway] signalled gateway — waiting for supervisord autorestart"
