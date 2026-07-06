@@ -35,11 +35,14 @@ if _ROOT not in sys.path:
 
 from libs import host_exec  # noqa: E402 - sys.path tweak first
 from libs.host_exec import HostExecError  # noqa: E402 - sys.path tweak first
+from jobs._common import RUNTIME_COMPOSE, TESTBED_NAME_COMPOSE  # noqa: E402
 from libs.lab_redeploy import (  # noqa: E402 - sys.path tweak first
     LabCleanupMode,
     LabRedeployConfig,
+    _LOCAL_COMPOSE_RUNNER,
     redeploy_testbed,
     verify_cfn_alignment,
+    verify_compose_cfn_alignment,
 )
 from libs.provisioners import (  # noqa: E402 - sys.path tweak first
     AgentRef,
@@ -275,6 +278,13 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
             return
 
         results: list[object] = []
+        compose_dir = os.environ.get("MYCELIUM_E2E_COMPOSE_DIR") or os.path.join(_ROOT, "infra")
+        runtime = os.environ.get("MYCELIUM_E2E_RUNTIME", "").strip().lower()
+        tb_name = getattr(testbed, "name", "") if testbed is not None else ""
+        use_compose_alignment = runtime == RUNTIME_COMPOSE or (
+            not runtime and os.environ.get("GITHUB_ACTIONS")
+        ) or tb_name == TESTBED_NAME_COMPOSE
+
         for name, hub in hubs:
             custom = getattr(hub, "custom", None) or {}
             backend_url = "http://localhost:8000"
@@ -283,7 +293,17 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
                     custom.get("mycelium_backend_url") or os.environ.get("MYCELIUM_BACKEND_URL") or backend_url
                 )
 
-            result = verify_cfn_alignment(hub, backend_url=backend_url)
+            if use_compose_alignment:
+                # Agent commands use docker exec into e2e-openclaw-hub, but
+                # CFN alignment must run on the host where docker ps sees
+                # e2e-mycelium-backend / e2e-cfn-mgmt.
+                result = verify_compose_cfn_alignment(
+                    _LOCAL_COMPOSE_RUNNER,
+                    compose_dir=compose_dir,
+                    backend_url="http://localhost:8000",
+                )
+            else:
+                result = verify_cfn_alignment(hub, backend_url=backend_url)
             if result is None:
                 # No CFN / backend on this host — perfectly fine
                 # on compose paths. Log once and move on.

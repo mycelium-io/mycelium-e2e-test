@@ -91,6 +91,9 @@ on:
       spoke_adapters:
         description: 'Comma-separated adapters to start on each spoke (openclaw,cursor,hermes)'
         default: 'openclaw'
+      hub_adapters:
+        description: 'Comma-separated adapters on the hub device (openclaw,cursor,hermes)'
+        default: 'openclaw'
 
 env:
   COMPOSE_FILE: infra/compose.e2e.yaml
@@ -102,9 +105,12 @@ env:
   LLM_API_KEY: ${{ secrets.LLM_API_KEY || vars.LLM_API_KEY || '' }}
   LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || vars.LLM_BASE_URL || '' }}
   # Spokes default to openclaw-only for legacy parity; PR / nightly /
-  # full runs from the mycelium repo can override via the
-  # ``spoke_adapters`` workflow input or client_payload field.
+  # full runs from the mycelium repo can override via workflow inputs or
+  # client_payload fields.
   SPOKE_ADAPTERS: ${{ github.event.inputs.spoke_adapters || github.event.client_payload.spoke_adapters || 'openclaw' }}
+  HUB_ADAPTERS: ${{ github.event.inputs.hub_adapters || github.event.client_payload.hub_adapters || 'openclaw' }}
+  # Optional cursor auth bind-mount for compose hub/spoke cursor tests.
+  HOST_CURSOR_AUTH: ${{ secrets.HOST_CURSOR_AUTH || '' }}
 
 jobs:
   e2e:
@@ -225,7 +231,7 @@ jobs:
           cp "$CLI_WHL" infra/mycelium_cli.whl
 
           docker build -t mycelium-spoke:dev \
-            --build-arg MYCELIUM_CLI_WHL=/tmp/mycelium_cli.whl \
+            --target spoke \
             -f infra/Dockerfile.spoke .
 
           echo "MYCELIUM_BACKEND_IMAGE=mycelium-backend:dev" >> "$GITHUB_ENV"
@@ -246,6 +252,16 @@ jobs:
             echo "WARNING: LLM-dependent tests (synthesis, catchup, convergence) will"
             echo "be skipped unless all three vars are set in GitHub secrets or vars."
           fi
+
+      - name: Set adapter matrix for scenario suites
+        run: |
+          case "${{ steps.resolve.outputs.suite }}" in
+            pr|nightly|weekly_full)
+              echo "HUB_ADAPTERS=openclaw,hermes" >> "$GITHUB_ENV"
+              echo "SPOKE_ADAPTERS=openclaw,cursor,hermes" >> "$GITHUB_ENV"
+              echo "PR/nightly/full suite → hub=$HUB_ADAPTERS spokes=$SPOKE_ADAPTERS"
+              ;;
+          esac
 
       - name: Start infrastructure
         run: |
@@ -459,91 +475,14 @@ jobs:
           echo "=== CLI doctor ==="
           mycelium doctor 2>&1 || true
 
-      - name: Build mycelium OpenClaw plugin
+      - name: Verify hub adapters (spoke-entrypoint installs in-container)
         run: |
-          MYCELIUM_REAL=$(readlink -f "$(which mycelium)")
-          MYCELIUM_PYTHON="$(dirname "$MYCELIUM_REAL")/python3"
-          if [ ! -f "$MYCELIUM_PYTHON" ]; then
-            MYCELIUM_PYTHON="$(dirname "$MYCELIUM_REAL")/python"
-          fi
-          echo "mycelium binary: $MYCELIUM_REAL"
-          echo "mycelium python: $MYCELIUM_PYTHON"
-          PLUGIN_DIR=$("$MYCELIUM_PYTHON" -c "
-          import importlib.resources, pathlib
-          pkg = importlib.resources.files('mycelium.integrations.openclaw.assets')
-          print(pathlib.Path(str(pkg)) / 'mycelium' / 'plugin')
-          ")
-          echo "Plugin source: $PLUGIN_DIR"
-          if [ -f "$PLUGIN_DIR/package.json" ]; then
-            echo "Building plugin (npm install + tsc)..."
-            cd "$PLUGIN_DIR"
-            npm install --prefer-offline --silent
-            npm run build
-            echo "dist/index.js exists: $([ -f dist/index.js ] && echo YES || echo NO)"
-          else
-            echo "WARNING: plugin package.json not found at $PLUGIN_DIR"
-          fi
-
-      - name: Register OpenClaw adapter
-        run: |
-          ensure_hub_running() {
-            local status health
-            status=$(docker inspect --format='{{.State.Status}}' e2e-openclaw-hub 2>/dev/null || echo "missing")
-            if [ "$status" = "running" ]; then
-              health=$(docker inspect --format='{{.State.Health.Status}}' e2e-openclaw-hub 2>/dev/null || echo "unknown")
-              if [ "$health" = "healthy" ]; then
-                return 0
-              fi
-              echo "Hub running but unhealthy (health=$health) — restarting..."
-            else
-              echo "Hub not running (status=$status) — starting..."
-            fi
-            docker compose -f $COMPOSE_FILE up -d --no-recreate openclaw-hub
-            for i in $(seq 1 90); do
-              health=$(docker inspect --format='{{.State.Health.Status}}' e2e-openclaw-hub 2>/dev/null || echo "missing")
-              if [ "$health" = "healthy" ]; then
-                echo "Hub healthy after ~$((i * 2))s"
-                return 0
-              fi
-              sleep 2
-            done
-            echo "ERROR: OpenClaw hub did not become healthy"
-            docker logs e2e-openclaw-hub --tail 50
-            return 1
-          }
-
-          ensure_hub_running
-
-          echo "Preparing staging directory in hub container..."
-          docker exec e2e-openclaw-hub sh -c "mkdir -p /tmp/mycelium-stage/extensions"
-
-          echo "Hub container status:"
+          echo "=== Hub adapter check ==="
           docker inspect --format='{{.State.Status}} (health={{.State.Health.Status}})' e2e-openclaw-hub
-
-          mycelium adapter add openclaw \
-            --openclaw-container e2e-openclaw-hub \
-            --yes
-          mycelium adapter add openclaw \
-            --openclaw-container e2e-openclaw-hub \
-            --step=otel \
-            --yes 2>&1 || echo "WARNING: otel step skipped (non-fatal)"
-
-          echo "Restarting hub so bind-mounted entrypoint regenerates config with mycelium channel..."
-          docker restart e2e-openclaw-hub
-          echo "Waiting for hub to become healthy..."
-          for i in $(seq 1 60); do
-            STATUS=$(docker inspect --format='{{.State.Health.Status}}' e2e-openclaw-hub 2>/dev/null || echo "unknown")
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Hub healthy after ~${i}s"
-              break
-            fi
-            if [ "$i" -eq 60 ]; then
-              echo "WARNING: Hub not healthy after 60s, dumping logs..."
-              docker logs e2e-openclaw-hub --tail 40
-            fi
-            sleep 1
-          done
-          docker inspect --format='{{.State.Status}} (health={{.State.Health.Status}})' e2e-openclaw-hub
+          docker exec e2e-openclaw-hub mycelium --version
+          docker exec e2e-openclaw-hub sh -c 'test -f /home/spoke/.openclaw/extensions/mycelium/dist/index.js'
+          docker exec e2e-openclaw-spoke1 sh -c 'command -v cursor-agent >/dev/null && echo cursor-agent: ok || echo cursor-agent: missing'
+          docker logs e2e-openclaw-hub 2>&1 | grep -E "mycelium-room|adapter add" | tail -10 || true
 
       - name: Run E2E tests
         env:

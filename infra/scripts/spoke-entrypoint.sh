@@ -12,7 +12,7 @@
 #
 # Always-on processes:
 #   - mycelium metrics collect (spoke OTLP collector → hub)
-#   - mycelium daemon run      (cc-daemon, dispatches @handle mentions)
+#   - mycelium daemon run --foreground (mycelium-daemon, dispatches cold-spawn adapters)
 #
 # Conditional processes (per ``SPOKE_ADAPTERS``):
 #   - openclaw: openclaw gateway run
@@ -71,8 +71,29 @@ api_url = "$BACKEND_URL"
 TOML
 fi
 
-mycelium config set server.api_url "$BACKEND_URL" 2>/dev/null || true
+    mycelium config set server.api_url "$BACKEND_URL" 2>/dev/null || true
 mycelium config set metrics.collector_url "$COLLECTOR_HUB" 2>/dev/null || true
+
+# CFN workspace + default MAS (written by mycelium-bootstrap to the shared volume).
+MYCELIUM_CONFIG_FILE="${MYCELIUM_CONFIG_FILE:-/shared/mycelium-config.json}"
+if [ -f "$MYCELIUM_CONFIG_FILE" ]; then
+    eval "$(node -e "
+      const c = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+      if (c.workspace_id) process.stdout.write('export BOOTSTRAP_WORKSPACE_ID=' + JSON.stringify(c.workspace_id) + '\n');
+      if (c.mas_id) process.stdout.write('export BOOTSTRAP_MAS_ID=' + JSON.stringify(c.mas_id) + '\n');
+    " "$MYCELIUM_CONFIG_FILE")"
+    if [ -n "${BOOTSTRAP_WORKSPACE_ID:-}" ]; then
+        mycelium config set server.workspace_id "$BOOTSTRAP_WORKSPACE_ID" 2>/dev/null || true
+        echo "[spoke-entrypoint] workspace_id from bootstrap: $BOOTSTRAP_WORKSPACE_ID"
+    fi
+    if [ -n "${BOOTSTRAP_MAS_ID:-}" ]; then
+        mycelium config set server.mas_id "$BOOTSTRAP_MAS_ID" 2>/dev/null || true
+        echo "[spoke-entrypoint] mas_id from bootstrap: $BOOTSTRAP_MAS_ID"
+    fi
+fi
+# Env overrides (compose CI exports these after bootstrap).
+[ -n "${WORKSPACE_ID:-}" ] && mycelium config set server.workspace_id "$WORKSPACE_ID" 2>/dev/null || true
+[ -n "${MAS_ID:-}" ] && mycelium config set server.mas_id "$MAS_ID" 2>/dev/null || true
 
 # LLM credentials → .env (consumed by adapter installers + CLI commands)
 {
@@ -120,6 +141,11 @@ if has_adapter openclaw; then
             exit 1
             ;;
     esac
+
+    # Install the mycelium OpenClaw plugin before generating openclaw.json so
+    # extensions/mycelium exists and the mycelium-room channel can be enabled.
+    mycelium adapter add openclaw --yes 2>&1 \
+        || echo "[spoke-entrypoint] adapter add openclaw skipped"
 
     node -e "
       const fs = require('fs');
@@ -250,10 +276,10 @@ if has_adapter openclaw; then
       console.log('[spoke-entrypoint] OpenClaw agents: ' + validAgents.join(', '));
     "
 
-    mycelium adapter add openclaw --yes 2>&1 \
-        || echo "[spoke-entrypoint] adapter add openclaw skipped"
     mycelium adapter add openclaw --step=otel --yes 2>&1 \
         || echo "[spoke-entrypoint] openclaw otel step skipped"
+    /openclaw/install-openclaw-skills.sh 2>&1 \
+        || echo "[spoke-entrypoint] openclaw skill install skipped"
 fi
 
 # ── Cursor bootstrap (if enabled) ───────────────────────────────────
@@ -302,11 +328,13 @@ YAML
 
     mycelium adapter add hermes --yes 2>&1 \
         || echo "[spoke-entrypoint] adapter add hermes skipped"
+    /openclaw/patch-hermes-plugin.sh 2>&1 \
+        || echo "[spoke-entrypoint] hermes plugin patch skipped"
 fi
 
 # ── Build supervisord.conf ──────────────────────────────────────────
 #
-# Always-on programs: collector + cc-daemon.
+# Always-on programs: collector + mycelium-daemon.
 # Per-adapter programs added conditionally.
 
 SUPERVISOR_CONF="/tmp/spoke-supervisord.conf"
@@ -328,8 +356,8 @@ stdout_logfile_maxbytes=0
 stderr_logfile=/dev/fd/2
 stderr_logfile_maxbytes=0
 
-[program:cc-daemon]
-command=mycelium daemon run
+[program:mycelium-daemon]
+command=mycelium daemon run --foreground
 autostart=true
 autorestart=true
 startsecs=5

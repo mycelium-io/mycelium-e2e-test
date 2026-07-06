@@ -126,6 +126,7 @@ class OpenClawProvisioner(ABCProvisioner):
                 bootstrap_room,
                 device_label,
             )
+            self._install_openclaw_skills(device, handle)
             return AgentRef(
                 handle=handle,
                 adapter=self.name,
@@ -212,6 +213,7 @@ class OpenClawProvisioner(ABCProvisioner):
         except HostExecError as exc:
             log.debug("openclaw.ensure_runtime: post-create chown failed: %s", exc)
 
+        self._install_openclaw_skills(device, handle)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -354,6 +356,7 @@ class OpenClawProvisioner(ABCProvisioner):
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
 
+        self._install_openclaw_skills(device, handle)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -482,6 +485,25 @@ class OpenClawProvisioner(ABCProvisioner):
         return self.register_in_room(device, handle, room, opening=opening)
 
     # ── helpers ───────────────────────────────────────────────────────
+
+    def _install_openclaw_skills(self, device: Any, agent_id: str | None = None) -> None:
+        """Copy the bundled mycelium skill into per-agent OpenClaw workspaces.
+
+        Product ``mycelium adapter add`` only seeds the default workspace;
+        E2E infra handles per-agent copies via ``install-openclaw-skills.sh``.
+        """
+        argv = ["/openclaw/install-openclaw-skills.sh"]
+        if agent_id:
+            argv.append(agent_id)
+        try:
+            host_exec.execute(device, argv, timeout=30.0)
+        except HostExecError as exc:
+            log.warning(
+                "openclaw: skill install failed on %s for %s: %s",
+                host_exec.describe(device),
+                agent_id or "*",
+                exc,
+            )
 
     def _list_openclaw_agents(self, device: Any) -> set[str]:
         """Return the set of agent handles configured in openclaw on ``device``.

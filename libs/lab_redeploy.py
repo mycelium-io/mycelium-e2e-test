@@ -633,6 +633,16 @@ def provision_workspace_and_mas(device: Any, cfn_mgmt_url: str, result: DeviceRe
 _CFN_MGMT_URL_INTERNAL = "http://ioc-cfn-mgmt-plane-svc:9000"
 _CFN_NODE_URL_INTERNAL = "http://ioc-cfn-svc:9002"
 
+# E2E compose stack uses shortened container names (see infra/compose.e2e.yaml).
+_COMPOSE_BACKEND_CONTAINER = "e2e-mycelium-backend"
+_COMPOSE_CFN_MGMT_CONTAINER = "e2e-cfn-mgmt"
+_COMPOSE_FILE = "compose.e2e.yaml"
+
+_LOCAL_COMPOSE_RUNNER: dict[str, Any] = {
+    "name": "compose-host",
+    "custom": {"transport": "local"},
+}
+
 _PERSIST_HUB_IDS = (
     # Persist the provisioned IDs + CFN URLs via the CLI. ``config
     # set`` writes ``~/.mycelium/config.toml``; ``config apply`` then
@@ -852,6 +862,151 @@ def verify_cfn_alignment(
         # progress log stays scannable. Flatten the env dump to a
         # single line so the WHOLE mismatch — both keys — survives
         # into the failure summary.
+        flat = " ".join(env_out2.split())
+        _record(
+            result,
+            "post-restart alignment check",
+            False,
+            f"backend env still shows: {flat or '<empty>'}",
+        )
+        return result
+
+    _record(
+        result,
+        "cfn alignment",
+        True,
+        f"workspace={canonical_ws[:8]}… mas={canonical_mas[:8]}… (drift corrected)",
+    )
+    result.workspace_id = canonical_ws
+    result.mas_id = canonical_mas
+    result.success = True
+    return result
+
+
+def _force_recreate_compose_cfn_services(
+    device: Any,
+    compose_dir: str,
+    *,
+    workspace_id: str,
+    mas_id: str,
+    restart_timeout: float = 180.0,
+) -> tuple[bool, str]:
+    """Force-recreate the E2E backend + CFN node with aligned env."""
+    import shlex
+
+    quoted_dir = shlex.quote(compose_dir)
+    recreate_cmd = (
+        f"cd {quoted_dir} && "
+        f"WORKSPACE_ID={shlex.quote(workspace_id)} "
+        f"MAS_ID={shlex.quote(mas_id)} "
+        f"docker compose -f {_COMPOSE_FILE} "
+        "up -d --force-recreate mycelium-backend ioc-cfn-svc"
+    )
+    return _sh(device, recreate_cmd, timeout=restart_timeout)
+
+
+def verify_compose_cfn_alignment(
+    device: Any,
+    *,
+    compose_dir: str,
+    backend_url: str = "http://localhost:8000",
+    restart_timeout: float = 180.0,
+) -> DeviceResult | None:
+    """Reconcile WORKSPACE_ID / MAS_ID for the E2E compose stack on the runner host.
+
+    Unlike :func:`verify_cfn_alignment` (lab installs with
+    ``mycelium-backend`` / ``ioc-cfn-mgmt-plane-svc`` container names),
+    the compose testbed dispatches agent commands via ``docker exec`` into
+    ``e2e-openclaw-hub`` — so alignment must run on the **host** (local
+    transport) where ``docker ps`` can see ``e2e-mycelium-backend``.
+
+    Canonical IDs come from the CFN mgmt plane on ``localhost:9000``.
+    """
+    name = getattr(device, "name", None) or "compose-host"
+    result = DeviceResult(device_name=name, role="hub", success=False)
+
+    ok, ps_out = _sh(
+        device,
+        "docker ps --format '{{.Names}}' 2>/dev/null "
+        f"| grep -E '^({_COMPOSE_BACKEND_CONTAINER}|{_COMPOSE_CFN_MGMT_CONTAINER})$' | sort",
+        timeout=10,
+    )
+    needed = {_COMPOSE_BACKEND_CONTAINER, _COMPOSE_CFN_MGMT_CONTAINER}
+    present = {line.strip() for line in (ps_out or "").splitlines() if line.strip()}
+    missing = needed - present
+    if missing:
+        log.info(
+            "verify_compose_cfn_alignment(%s): %s not running — nothing to align",
+            name,
+            ", ".join(sorted(missing)),
+        )
+        return None
+
+    cfn_mgmt_url = _cfn_mgmt_url_from(backend_url)
+    truth = provision_workspace_and_mas(device, cfn_mgmt_url, result)
+    if truth is None:
+        return result
+    canonical_ws, canonical_mas = truth
+
+    ok, env_out = _sh(
+        device,
+        f"docker exec {_COMPOSE_BACKEND_CONTAINER} env 2>/dev/null",
+        timeout=10,
+    )
+    if not ok:
+        _record(result, "read backend container env", False, env_out)
+        return result
+    container_ws = container_mas = ""
+    for line in env_out.splitlines():
+        if line.startswith("WORKSPACE_ID="):
+            container_ws = line.split("=", 1)[1].strip()
+        elif line.startswith("MAS_ID="):
+            container_mas = line.split("=", 1)[1].strip()
+
+    aligned = container_ws == canonical_ws and container_mas == canonical_mas
+    if aligned:
+        _record(
+            result,
+            "cfn alignment",
+            True,
+            f"workspace={canonical_ws[:8]}… mas={canonical_mas[:8]}… (no drift)",
+        )
+        result.workspace_id = canonical_ws
+        result.mas_id = canonical_mas
+        result.success = True
+        if not persist_workspace_and_mas(device, canonical_ws, canonical_mas, result, is_hub=True):
+            return result
+        return result
+
+    log.info(
+        "verify_compose_cfn_alignment(%s): drift — container WS=%s MAS=%s vs CFN WS=%s MAS=%s",
+        name,
+        container_ws[:8] or "<empty>",
+        container_mas[:8] or "<empty>",
+        canonical_ws[:8],
+        canonical_mas[:8],
+    )
+
+    if not persist_workspace_and_mas(device, canonical_ws, canonical_mas, result, is_hub=True):
+        return result
+
+    ok, out = _force_recreate_compose_cfn_services(
+        device,
+        compose_dir,
+        workspace_id=canonical_ws,
+        mas_id=canonical_mas,
+        restart_timeout=restart_timeout,
+    )
+    if not _record(result, "force-recreate compose backend + cfn node", ok, out):
+        return result
+
+    ok, env_out2 = _sh(
+        device,
+        f"docker exec {_COMPOSE_BACKEND_CONTAINER} env 2>/dev/null "
+        "| grep -E '^(WORKSPACE_ID|MAS_ID)='",
+        timeout=10,
+    )
+    if not ok or f"WORKSPACE_ID={canonical_ws}" not in env_out2:
         flat = " ".join(env_out2.split())
         _record(
             result,
