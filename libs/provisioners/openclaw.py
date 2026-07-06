@@ -127,6 +127,7 @@ class OpenClawProvisioner(ABCProvisioner):
                 device_label,
             )
             self._install_openclaw_skills(device, handle)
+            self._patch_openclaw_plugin(device)
             return AgentRef(
                 handle=handle,
                 adapter=self.name,
@@ -214,6 +215,7 @@ class OpenClawProvisioner(ABCProvisioner):
             log.debug("openclaw.ensure_runtime: post-create chown failed: %s", exc)
 
         self._install_openclaw_skills(device, handle)
+        self._patch_openclaw_plugin(device)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -357,6 +359,7 @@ class OpenClawProvisioner(ABCProvisioner):
             )
 
         self._install_openclaw_skills(device, handle)
+        self._patch_openclaw_plugin(device)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -502,6 +505,18 @@ class OpenClawProvisioner(ABCProvisioner):
                 "openclaw: skill install failed on %s for %s: %s",
                 host_exec.describe(device),
                 agent_id or "*",
+                exc,
+            )
+
+    def _patch_openclaw_plugin(self, device: Any) -> None:
+        """Apply infra-side OpenClaw plugin patches and restart the gateway."""
+        try:
+            host_exec.execute(device, ["/openclaw/patch-openclaw-plugin.sh"], timeout=30.0)
+            host_exec.execute(device, ["/openclaw/restart-openclaw-gateway.sh"], timeout=20.0)
+        except HostExecError as exc:
+            log.warning(
+                "openclaw: plugin patch failed on %s: %s",
+                host_exec.describe(device),
                 exc,
             )
 

@@ -78,6 +78,18 @@ for (const workspace of workspaces) {
     fs.copyFileSync(path.join(skillSrc, name), path.join(dest, name));
   }
   console.log(`[install-openclaw-skills] → ${dest}`);
+
+  const agentsMd = path.join(workspace, 'AGENTS.md');
+  const mandate = [
+    '# Mycelium coordination (E2E)',
+    '',
+    'When you receive a `[CognitiveEngine — Round` message, you **must** run the',
+    '`mycelium negotiate ...` shell command it specifies. Prose-only accept/reject',
+    'replies do **not** register with CognitiveEngine.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(agentsMd, mandate);
+  console.log(`[install-openclaw-skills] → ${agentsMd}`);
 }
 NODE
 }

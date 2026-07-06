@@ -228,7 +228,7 @@ if has_adapter openclaw; then
             'mycelium-room': {
               enabled: true,
               backendUrl: '${MYCELIUM_BACKEND_URL:-http://mycelium-backend:8000}',
-              requireMention: true,
+              requireMention: false,
               room: 'mycelium_room',
               agents: validAgents
             }
@@ -280,6 +280,8 @@ if has_adapter openclaw; then
         || echo "[spoke-entrypoint] openclaw otel step skipped"
     /openclaw/install-openclaw-skills.sh 2>&1 \
         || echo "[spoke-entrypoint] openclaw skill install skipped"
+    /openclaw/patch-openclaw-plugin.sh 2>&1 \
+        || echo "[spoke-entrypoint] openclaw plugin patch skipped"
 fi
 
 # ── Cursor bootstrap (if enabled) ───────────────────────────────────
