@@ -29,7 +29,7 @@ else:
     print(f"[daemon-subscribe] already subscribed to {room}")
 
 proc = subprocess.run(
-    ["pgrep", "-f", "mycelium daemon run"],
+    ["pgrep", "-f", "mycelium.daemon"],
     capture_output=True,
     text=True,
     check=False,
