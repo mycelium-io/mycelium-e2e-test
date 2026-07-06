@@ -292,6 +292,8 @@ services:
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
     volumes:
       - e2e-shared:/shared:ro
+      # Use the repo entrypoint so hub boots before mycelium adapter install.
+      - ./scripts/openclaw-entrypoint.sh:/openclaw/entrypoint.sh:ro
     ports:
       - "${E2E_OPENCLAW_PORT:-18789}:18789"
     healthcheck:

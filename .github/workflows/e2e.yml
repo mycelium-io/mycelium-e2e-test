@@ -5,6 +5,7 @@ name: E2E Tests
 #
 # 1. Local CI for changes to this repo (e2e tooling): push to any
 #    non-main branch + PRs into main. These default to the `pr` suite.
+#    ``fix/e2e-workflow`` is workflow_dispatch-only (no push CI).
 #
 # 2. Schedule:
 #    - 05:00 UTC daily → `nightly` suite (pr + nightly tiers)
@@ -46,6 +47,7 @@ on:
     branches:
       - '**'
       - '!main'
+      - '!fix/e2e-workflow'
   pull_request:
     branches: [main]
   schedule:
@@ -478,11 +480,39 @@ jobs:
 
       - name: Register OpenClaw adapter
         run: |
+          ensure_hub_running() {
+            local status health
+            status=$(docker inspect --format='{{.State.Status}}' e2e-openclaw-hub 2>/dev/null || echo "missing")
+            if [ "$status" = "running" ]; then
+              health=$(docker inspect --format='{{.State.Health.Status}}' e2e-openclaw-hub 2>/dev/null || echo "unknown")
+              if [ "$health" = "healthy" ]; then
+                return 0
+              fi
+              echo "Hub running but unhealthy (health=$health) — restarting..."
+            else
+              echo "Hub not running (status=$status) — starting..."
+            fi
+            docker compose -f $COMPOSE_FILE up -d --no-recreate openclaw-hub
+            for i in $(seq 1 90); do
+              health=$(docker inspect --format='{{.State.Health.Status}}' e2e-openclaw-hub 2>/dev/null || echo "missing")
+              if [ "$health" = "healthy" ]; then
+                echo "Hub healthy after ~$((i * 2))s"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "ERROR: OpenClaw hub did not become healthy"
+            docker logs e2e-openclaw-hub --tail 50
+            return 1
+          }
+
+          ensure_hub_running
+
           echo "Preparing staging directory in hub container..."
-          docker exec e2e-openclaw-hub sh -c "mkdir -p /tmp/mycelium-stage/extensions" || true
+          docker exec e2e-openclaw-hub sh -c "mkdir -p /tmp/mycelium-stage/extensions"
 
           echo "Hub container status:"
-          docker inspect --format='{{.State.Status}} (health={{.State.Health.Status}})' e2e-openclaw-hub || true
+          docker inspect --format='{{.State.Status}} (health={{.State.Health.Status}})' e2e-openclaw-hub
 
           mycelium adapter add openclaw \
             --openclaw-container e2e-openclaw-hub \
