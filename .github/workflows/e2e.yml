@@ -374,7 +374,7 @@ jobs:
       - name: Verify backend container environment
         run: |
           echo "=== Backend container env check ==="
-          for var in LLM_API_KEY LLM_BASE_URL LLM_MODEL WORKSPACE_ID MAS_ID; do
+          for var in LLM_API_KEY LLM_BASE_URL LLM_MODEL WORKSPACE_ID MAS_ID COGNITION_FABRIC_NODE_URL; do
             val=$(docker exec e2e-mycelium-backend printenv "$var" 2>/dev/null || echo "")
             if [ -n "$val" ]; then
               if [ "$var" = "LLM_API_KEY" ]; then
@@ -386,6 +386,12 @@ jobs:
               echo "  $var: *** NOT SET ***"
             fi
           done
+
+          cfn_url=$(docker exec e2e-mycelium-backend printenv COGNITION_FABRIC_NODE_URL 2>/dev/null || echo "")
+          if [ -z "$cfn_url" ]; then
+            echo "ERROR: COGNITION_FABRIC_NODE_URL must be set on the backend for CFN coordination"
+            exit 1
+          fi
 
           echo ""
           echo "=== Backend /health LLM status ==="
