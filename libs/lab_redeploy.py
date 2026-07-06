@@ -631,7 +631,7 @@ def provision_workspace_and_mas(device: Any, cfn_mgmt_url: str, result: DeviceRe
 # The backend container reaches CFN services by docker-network hostname,
 # so these don't change between deployments.
 _CFN_MGMT_URL_INTERNAL = "http://ioc-cfn-mgmt-plane-svc:9000"
-_CFN_SVC_URL_INTERNAL = "http://ioc-cfn-svc:9002"
+_CFN_NODE_URL_INTERNAL = "http://ioc-cfn-svc:9002"
 
 _PERSIST_HUB_IDS = (
     # Persist the provisioned IDs + CFN URLs via the CLI. ``config
@@ -641,7 +641,7 @@ _PERSIST_HUB_IDS = (
     "mycelium config set server.workspace_id {ws} && "
     "mycelium config set server.mas_id {mas} && "
     "mycelium config set runtime.cfn_mgmt_url {cfn_mgmt} && "
-    "mycelium config set runtime.cfn_svc_url {cfn_svc} && "
+    "mycelium config set runtime.cognition_fabric_node_url {cfn_node} && "
     "mycelium config apply"
 )
 
@@ -664,7 +664,7 @@ def persist_workspace_and_mas(
     """Write the IDs into the device's config via the mycelium CLI.
 
     On the hub, also writes ``CFN_MGMT_URL`` and
-    ``CFN_SVC_URL`` so the backend container can reach
+    ``COGNITION_FABRIC_NODE_URL`` so the backend container can reach
     the cognition fabric services (without these, ``mycelium doctor
     --mode hub`` reports a CFN config warning and negotiations fail).
     """
@@ -681,7 +681,7 @@ def persist_workspace_and_mas(
         ws=workspace_id,
         mas=mas_id,
         cfn_mgmt=_CFN_MGMT_URL_INTERNAL,
-        cfn_svc=_CFN_SVC_URL_INTERNAL,
+        cfn_node=_CFN_NODE_URL_INTERNAL,
     )
     ok, out = _sh(device, cmd, timeout=30)
     label = "persist workspace + MAS + CFN URLs" if is_hub else "persist workspace + MAS"
@@ -957,7 +957,7 @@ def redeploy_device(
             return result
 
         # Restart the backend so it picks up the freshly written
-        # WORKSPACE_ID / MAS_ID / CFN_MGMT_URL / CFN_SVC_URL
+        # WORKSPACE_ID / MAS_ID / CFN_MGMT_URL / COGNITION_FABRIC_NODE_URL
         # from the rendered .env. Without this restart the backend
         # keeps its boot-time env (empty values) and ``mycelium
         # doctor`` reports CFN config warnings.
