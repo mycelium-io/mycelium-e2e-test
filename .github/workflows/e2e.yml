@@ -183,7 +183,9 @@ jobs:
           echo "mycelium_ref=$MYCELIUM_REF" | tee -a "$GITHUB_OUTPUT"
           echo "datafile=$DATAFILE"    | tee -a "$GITHUB_OUTPUT"
           echo "pr_number=$PR_NUMBER"  | tee -a "$GITHUB_OUTPUT"
-          [ -n "$PR_NUMBER" ] && echo "ℹ️  Triggered from mycelium PR #$PR_NUMBER"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "ℹ️  Triggered from mycelium PR #$PR_NUMBER"
+          fi
 
       - name: Determine build mode
         env:
