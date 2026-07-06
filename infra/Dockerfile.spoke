@@ -92,12 +92,14 @@ COPY --chown=spoke:spoke infra/scripts/spoke-entrypoint.sh /openclaw/entrypoint.
 COPY --chown=spoke:spoke infra/scripts/install-openclaw-skills.sh /openclaw/install-openclaw-skills.sh
 COPY --chown=spoke:spoke infra/scripts/patch-hermes-plugin.sh /openclaw/patch-hermes-plugin.sh
 COPY --chown=spoke:spoke infra/scripts/daemon-subscribe.sh /openclaw/daemon-subscribe.sh
+COPY --chown=spoke:spoke infra/scripts/patch-mycelium-daemon.sh /openclaw/patch-mycelium-daemon.sh
 COPY --chown=spoke:spoke infra/scripts/install-openclaw-mycelium-plugin.sh /openclaw/install-openclaw-mycelium-plugin.sh
 COPY --chown=spoke:spoke infra/scripts/patch-openclaw-plugin.sh /openclaw/patch-openclaw-plugin.sh
 COPY --chown=spoke:spoke infra/scripts/restart-hermes-gateway.sh /openclaw/restart-hermes-gateway.sh
 COPY --chown=spoke:spoke infra/scripts/restart-openclaw-gateway.sh /openclaw/restart-openclaw-gateway.sh
 RUN chmod +x /openclaw/entrypoint.sh /openclaw/install-openclaw-skills.sh \
-    /openclaw/daemon-subscribe.sh /openclaw/install-openclaw-mycelium-plugin.sh \
+    /openclaw/daemon-subscribe.sh /openclaw/patch-mycelium-daemon.sh \
+    /openclaw/install-openclaw-mycelium-plugin.sh \
     /openclaw/patch-hermes-plugin.sh /openclaw/patch-openclaw-plugin.sh \
     /openclaw/restart-hermes-gateway.sh /openclaw/restart-openclaw-gateway.sh
 
@@ -128,7 +130,8 @@ RUN WHEEL="$(ls /tmp/mycelium_cli*.whl | head -1)" \
     && chmod -R a+rX /usr/local/share/uv \
     && ln -sf /usr/local/share/uv/tools/mycelium-cli/bin/mycelium /usr/local/bin/mycelium \
     && rm -f /tmp/mycelium_cli*.whl \
-    && mycelium --version
+    && mycelium --version \
+    && bash /openclaw/patch-mycelium-daemon.sh
 
 # ── Final runtime image ──────────────────────────────────────────────
 

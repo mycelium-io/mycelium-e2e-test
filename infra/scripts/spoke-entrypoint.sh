@@ -58,6 +58,8 @@ if ! command -v mycelium &>/dev/null; then
     curl -fsSL https://mycelium-io.github.io/mycelium/install.sh | bash
 fi
 echo "[spoke-entrypoint] mycelium CLI:     $(mycelium --version 2>/dev/null || echo 'installed')"
+/openclaw/patch-mycelium-daemon.sh 2>&1 \
+    || echo "[spoke-entrypoint] mycelium daemon patch skipped"
 
 # ── Mycelium config (shared by all adapters) ────────────────────────
 
