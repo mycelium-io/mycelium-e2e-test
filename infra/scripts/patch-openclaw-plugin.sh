@@ -22,35 +22,32 @@ patch_route() {
     fi
 
     python3 - "$ROUTE" <<'PY'
-from pathlib import Path
+import re
 import sys
+from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text()
 
-old_tail = (
-    '    "Explain your reasoning before running the command. Walking away with no agreement is a legitimate outcome — keep rejecting until the session ends if your hard constraints can\'t be met.",\n'
-    '  ]\n'
-    '    .filter(Boolean)\n'
-    '    .join("\\n");\n'
+text, n = re.subn(
+    r'"Explain your reasoning before running the command\.[^"]*"',
+    (
+        '"MANDATORY: run exactly one mycelium negotiate shell command below. '
+        'Prose-only accept/reject does NOT register with CognitiveEngine.",\n'
+        '        "Brief reasoning is fine, but you MUST execute the command in a shell before replying.",\n'
+        '        "Walking away with no agreement is valid — keep rejecting until the session ends if your hard constraints cannot be met."'
+    ),
+    text,
+    count=1,
 )
-new_tail = (
-    '    "MANDATORY: run exactly one mycelium negotiate shell command below. Prose-only accept/reject does NOT register with CognitiveEngine.",\n'
-    '    "Brief reasoning is fine, but you MUST execute the command in a shell before replying.",\n'
-    '    "Walking away with no agreement is valid — keep rejecting until the session ends if your hard constraints cannot be met.",\n'
-    '  ]\n'
-    '    .filter(Boolean)\n'
-    '    .join("\\n");\n'
-)
-if old_tail not in text:
-    raise SystemExit(f"[patch-openclaw-plugin] tail block not found in {path}")
-text = text.replace(old_tail, new_tail, 1)
+if n != 1:
+    raise SystemExit(f"[patch-openclaw-plugin] explain line not found in {path}")
 
-needle = '    return [\n        roundHeader,'
+needle = "return [\n        roundHeader,"
 insert = (
-    '    return [\n'
+    "return [\n"
     '        "MANDATORY: run exactly one mycelium negotiate shell command. Prose-only replies are invalid.",\n'
-    '        roundHeader,'
+    "        roundHeader,"
 )
 if needle not in text:
     raise SystemExit(f"[patch-openclaw-plugin] return header not found in {path}")
