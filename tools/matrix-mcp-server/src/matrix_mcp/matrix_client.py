@@ -128,9 +128,7 @@ class MatrixClient:
         rooms = []
         for rid in data.get("joined_rooms", []):
             try:
-                state = await self._get(
-                    f"/_matrix/client/v3/rooms/{quote(rid, safe='')}/state/m.room.name/"
-                )
+                state = await self._get(f"/_matrix/client/v3/rooms/{quote(rid, safe='')}/state/m.room.name/")
                 name = state.get("name", rid)
             except httpx.HTTPStatusError:
                 name = rid
@@ -166,10 +164,7 @@ class MatrixClient:
 
     async def get_room_members(self, room_id_or_alias: str) -> list[dict]:
         room_id = await self._ensure_room_id(room_id_or_alias)
-        data = await self._get(
-            f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members"
-        )
+        data = await self._get(f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/joined_members")
         return [
-            {"user_id": uid, "display_name": info.get("display_name")}
-            for uid, info in data.get("joined", {}).items()
+            {"user_id": uid, "display_name": info.get("display_name")} for uid, info in data.get("joined", {}).items()
         ]

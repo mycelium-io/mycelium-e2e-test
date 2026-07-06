@@ -36,6 +36,7 @@ mcp = FastMCP("matrix")
 
 # -- Identity ----------------------------------------------------------------
 
+
 @mcp.tool()
 async def whoami() -> dict:
     """Return the Matrix user ID for the currently authenticated account."""
@@ -49,6 +50,7 @@ async def resolve_alias(alias: str) -> dict:
 
 
 # -- Messaging ---------------------------------------------------------------
+
 
 @mcp.tool()
 async def send_message(
@@ -93,6 +95,7 @@ async def send_reaction(room: str, event_id: str, emoji: str) -> dict:
 
 
 # -- Room Management ---------------------------------------------------------
+
 
 @mcp.tool()
 async def list_rooms() -> list[dict]:
@@ -155,6 +158,7 @@ async def get_room_members(room: str) -> list[dict]:
 
 
 # -- Entry point -------------------------------------------------------------
+
 
 def main() -> None:
     mcp.run(transport="stdio")

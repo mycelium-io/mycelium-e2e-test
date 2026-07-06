@@ -66,25 +66,8 @@ MCP servers from the Cursor settings panel.
 
 ## Usage examples
 
-`tests/examples_matrix_mcp.py` provides a runnable CLI that exercises the
-MCP client for common tasks: identity checks, room management, message
-round-trips, user registration, multi-agent setup, and negotiation triggers.
-
-```bash
-# From repo root
-export MATRIX_ACCESS_TOKEN=<your-token>
-
-uv run python tests/examples_matrix_mcp.py whoami
-uv run python tests/examples_matrix_mcp.py read --room '#agents:local'
-uv run python tests/examples_matrix_mcp.py roundtrip
-uv run python tests/examples_matrix_mcp.py register --user test-agent --password agent123
-uv run python tests/examples_matrix_mcp.py setup --room demo --agents agent-alpha,agent-beta
-```
-
-The patterns are derived from the older pytest-based test suite at
-`mycelium_e2e/matrix_e2e.py`, which contains full end-to-end examples of
-HMAC-based user registration, room lifecycle, multi-agent negotiation
-orchestration, and Matrix ↔ Mycelium IOC path verification.
+Use the MCP tools from Cursor after configuring `.cursor/mcp.json`, or call
+the Matrix client helpers in `libs/matrix_client.py` from pyATS testcases.
 
 ## Architecture
 
