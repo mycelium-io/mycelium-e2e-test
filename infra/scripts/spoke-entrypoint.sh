@@ -1,5 +1,10 @@
 #!/bin/bash
-# Unified spoke entrypoint for E2E CI.
+# Unified spoke/hub entrypoint for E2E CI.
+#
+# ``OPENCLAW_ROLE`` selects the Matrix agent set when openclaw is enabled:
+#   hub    → agent-alpha agent-beta agent-gamma agent-delta
+#   spoke1 → claire-agent
+#   spoke2 → oclw5-agent
 #
 # Reads ``SPOKE_ADAPTERS`` (comma-separated) and stands up the requested
 # adapter runtimes side-by-side. Process supervision is delegated to
@@ -105,10 +110,13 @@ if has_adapter openclaw; then
     ROOM_ID=$(json_get "d.room_id")
 
     case "$ROLE" in
+        hub)
+            AGENTS="agent-alpha agent-beta agent-gamma agent-delta"
+            ;;
         spoke1) AGENTS="claire-agent" ;;
         spoke2) AGENTS="oclw5-agent" ;;
         *)
-            echo "[spoke-entrypoint] ERROR: Unknown spoke role: $ROLE" >&2
+            echo "[spoke-entrypoint] ERROR: Unknown role: $ROLE (expected hub, spoke1, or spoke2)" >&2
             exit 1
             ;;
     esac
@@ -127,6 +135,13 @@ if has_adapter openclaw; then
         if (!tokens[id]) console.error('[spoke-entrypoint] WARNING: No token for ' + id);
         return !!tokens[id];
       });
+
+      const path = require('path');
+      const configDir = '$CONFIG_DIR';
+      const hasMycelium = fs.existsSync(path.join(configDir, 'extensions', 'mycelium'));
+      if (!hasMycelium) {
+        console.log('[spoke-entrypoint] Mycelium plugin not installed yet — omitting mycelium-room channel');
+      }
 
       const matrixAccounts = {};
       for (const id of validAgents) {
@@ -182,13 +197,23 @@ if has_adapter openclaw; then
             dm: { allowFrom: ['*'] },
             groupAllowFrom: ['*'],
             network: { dangerouslyAllowPrivateNetwork: true }
-          }
+          },
+          ...(hasMycelium ? {
+            'mycelium-room': {
+              enabled: true,
+              backendUrl: '${MYCELIUM_BACKEND_URL:-http://mycelium-backend:8000}',
+              requireMention: true,
+              room: 'mycelium_room',
+              agents: validAgents
+            }
+          } : {})
         },
         plugins: {
-          allow: ['litellm', 'matrix'],
+          allow: hasMycelium ? ['litellm', 'matrix', 'mycelium'] : ['litellm', 'matrix'],
           entries: {
             matrix: { enabled: true },
-            litellm: { enabled: true }
+            litellm: { enabled: true },
+            ...(hasMycelium ? { mycelium: { enabled: true } } : {})
           }
         },
         bindings: validAgents.map(id => ({
