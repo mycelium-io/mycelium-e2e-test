@@ -522,11 +522,7 @@ jobs:
             --step=otel \
             --yes 2>&1 || echo "WARNING: otel step skipped (non-fatal)"
 
-          echo "Copying updated entrypoint into hub container..."
-          docker cp infra/scripts/openclaw-entrypoint.sh e2e-openclaw-hub:/openclaw/entrypoint.sh
-          docker exec -u 0 e2e-openclaw-hub chmod +x /openclaw/entrypoint.sh
-
-          echo "Restarting hub so updated entrypoint regenerates config with mycelium channel..."
+          echo "Restarting hub so bind-mounted entrypoint regenerates config with mycelium channel..."
           docker restart e2e-openclaw-hub
           echo "Waiting for hub to become healthy..."
           for i in $(seq 1 60); do
