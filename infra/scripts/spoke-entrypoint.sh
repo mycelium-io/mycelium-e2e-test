@@ -145,7 +145,9 @@ if has_adapter openclaw; then
     # Install the mycelium OpenClaw plugin before generating openclaw.json so
     # extensions/mycelium exists and the mycelium-room channel can be enabled.
     mycelium adapter add openclaw --yes 2>&1 \
-        || echo "[spoke-entrypoint] adapter add openclaw skipped"
+        || echo "[spoke-entrypoint] adapter add openclaw skipped (trying infra plugin install)"
+    /openclaw/install-openclaw-mycelium-plugin.sh 2>&1 \
+        || echo "[spoke-entrypoint] infra mycelium plugin install skipped"
 
     node -e "
       const fs = require('fs');
