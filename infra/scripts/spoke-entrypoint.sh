@@ -376,6 +376,11 @@ fi
 
 SUPERVISOR_CONF="/tmp/spoke-supervisord.conf"
 
+# Supervisord may run as root (compose image) while programs run as spoke.
+# Always pin HOME so mycelium/openclaw do not read /root/.mycelium or /root/.openclaw.
+SPOKE_PROG_ENV='directory=/home/spoke
+environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s"'
+
 cat > "$SUPERVISOR_CONF" <<CONF
 [supervisord]
 nodaemon=true
@@ -383,6 +388,7 @@ logfile=/tmp/supervisord.log
 loglevel=info
 
 [program:metrics-collector]
+${SPOKE_PROG_ENV}
 command=mycelium metrics collect --foreground
 autostart=true
 autorestart=true
@@ -393,6 +399,7 @@ stderr_logfile=/dev/fd/2
 stderr_logfile_maxbytes=0
 
 [program:mycelium-daemon]
+${SPOKE_PROG_ENV}
 command=mycelium daemon run --foreground
 autostart=true
 autorestart=true
@@ -407,6 +414,7 @@ if has_adapter openclaw; then
     cat >> "$SUPERVISOR_CONF" <<CONF
 
 [program:openclaw-gateway]
+${SPOKE_PROG_ENV}
 command=openclaw gateway run --force --verbose --bind lan
 autostart=true
 autorestart=true
@@ -422,6 +430,7 @@ if has_adapter hermes; then
     cat >> "$SUPERVISOR_CONF" <<CONF
 
 [program:hermes-gateway]
+${SPOKE_PROG_ENV}
 command=hermes gateway run
 autostart=true
 autorestart=true
