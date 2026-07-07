@@ -520,6 +520,8 @@ class _ScenarioCore(aetest.Testcase):
                         f"(suite_shared_room={self.room!r})"
                     )
 
+            self._reset_openclaw_gateway_sessions()
+
             try:
                 sessions.wait_for_no_active_sessions(self.backend_url, self.room)
             except SessionError as exc:
@@ -650,7 +652,8 @@ class _ScenarioCore(aetest.Testcase):
         """
         keep_rooms = os.environ.get("MYCELIUM_E2E_KEEP_ROOMS", "").lower() in {"1", "true", "yes"}
 
-        # Suite-shared rooms: just drain the session, never delete the room.
+        # Suite-shared rooms: drain the session, reset gateway context,
+        # never delete the room.
         if getattr(self, "_suite_shared_room", False):
             session_room = getattr(self, "session_room", None)
             if session_room:
@@ -676,6 +679,7 @@ class _ScenarioCore(aetest.Testcase):
                 )
             except SessionError as exc:
                 log.warning("cleanup: session still active on %s: %s", self.room, exc)
+            self._reset_openclaw_gateway_sessions()
             return
 
         # Always unregister agents — this removes the room from each agent's
@@ -705,6 +709,26 @@ class _ScenarioCore(aetest.Testcase):
             sessions.delete_room(self.control_device, self.room)
         except Exception as exc:  # noqa: BLE001
             log.debug("room delete failed (ignored): %s", exc)
+
+    def _reset_openclaw_gateway_sessions(self) -> None:
+        """Reset OpenClaw mycelium-room sessions between suite scenarios.
+
+        Suite mode keeps agents registered to one parent room across rows.
+        Without a gateway ``sessions.reset`` between scenarios, negotiation
+        ticks land in hundred-message histories and agents stop posting
+        ``mycelium negotiate respond``.
+        """
+        for binding in self.agents:
+            if binding.ref is None or binding.spec.get("adapter") != "openclaw":
+                continue
+            try:
+                binding.provisioner.cleanup_agent(binding.device, binding.ref, self.room)
+            except Exception as exc:  # noqa: BLE001 - best-effort hygiene
+                log.warning(
+                    "openclaw session reset failed for %s (continuing): %s",
+                    binding.actual_handle,
+                    exc,
+                )
 
     def _chown_mycelium_on_agent_hosts(self) -> None:
         """Reclaim user ownership of ``~/.mycelium`` on each agent host."""

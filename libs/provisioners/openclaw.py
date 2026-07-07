@@ -327,6 +327,12 @@ class OpenClawProvisioner(ABCProvisioner):
             "--description",
             f"matrix-scenario {handle} in {room}",
         ]
+        # Drop stale gateway context before adopting into a new negotiation.
+        self.cleanup_agent(
+            device,
+            AgentRef(handle=handle, adapter=self.name, device_name=str(device)),
+            room,
+        )
         try:
             result = host_exec.execute(device, argv, timeout=30.0)
         except HostExecError as exc:
@@ -659,6 +665,24 @@ class OpenClawProvisioner(ABCProvisioner):
                     key,
                     proc.stderr.strip()[:200],
                 )
+
+        self._trim_stale_session_files(device)
+
+    def _trim_stale_session_files(self, device: Any, *, max_files: int = 3) -> None:
+        """Remove excess per-agent ``.jsonl`` session files on the gateway host."""
+        trim = (
+            'for d in "$HOME/.openclaw/agents/"*/sessions; do '
+            '[ -d "$d" ] || continue; '
+            f'count=$(ls -1 "$d"/*.jsonl 2>/dev/null | wc -l); '
+            f'if [ "$count" -gt {max_files} ]; then '
+            f'  ls -1t "$d"/*.jsonl | tail -n +{max_files + 1} | xargs rm -f; '
+            "fi; "
+            "done"
+        )
+        try:
+            host_exec.execute(device, trim, shell=True, timeout=30.0)
+        except HostExecError as exc:
+            log.debug("openclaw._trim_stale_session_files: %s", exc)
 
     # ── helpers ───────────────────────────────────────────────────────
 

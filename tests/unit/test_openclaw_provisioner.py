@@ -65,6 +65,15 @@ def _is_chown(argv) -> bool:
     return "chown" in s
 
 
+def _is_infra_script(argv) -> bool:
+    """Baked spoke infra helpers invoked during ensure/register."""
+    if isinstance(argv, list) and argv and str(argv[0]).startswith("/openclaw/"):
+        return True
+    if isinstance(argv, str):
+        return "/openclaw/" in argv or ".openclaw/agents/" in argv
+    return False
+
+
 def test_ensure_runtime_short_circuits_when_agent_already_present():
     """Idempotent fast path: if ``openclaw agents list`` shows the handle, no
     create call is issued. This is the steady-state for repeated
@@ -75,7 +84,7 @@ def test_ensure_runtime_short_circuits_when_agent_already_present():
 
     def fake_execute(_device, argv, **_kwargs):
         calls.append(argv if isinstance(argv, str) else list(argv))
-        if _is_chown(argv):
+        if _is_chown(argv) or _is_infra_script(argv):
             return _ok()
         if argv[:3] == ["mycelium", "room", "create"]:
             return _ok()
@@ -109,7 +118,7 @@ def test_ensure_runtime_creates_when_agent_absent(monkeypatch):
 
     def fake_execute(_device, argv, **_kwargs):
         calls.append(argv if isinstance(argv, str) else list(argv))
-        if _is_chown(argv):
+        if _is_chown(argv) or _is_infra_script(argv):
             return _ok()
         if argv[:3] == ["mycelium", "room", "create"]:
             return _ok()
@@ -235,8 +244,13 @@ def test_register_in_room_calls_agent_add_with_room():
     # Matrix token env follows the canonical convention
     assert ref.metadata["matrix_token_env"] == "MATRIX_TOKEN_AGENT_ALPHA"
 
-    argv = mock_exec.call_args[0][1]
-    assert argv[:3] == ["mycelium", "agent", "add"]
+    add_calls = [
+        c[0][1]
+        for c in mock_exec.call_args_list
+        if isinstance(c[0][1], list) and c[0][1][:3] == ["mycelium", "agent", "add"]
+    ]
+    assert len(add_calls) == 1
+    argv = add_calls[0]
     assert "agent-alpha" in argv
     assert "--room" in argv and "r1" in argv
 
@@ -259,12 +273,16 @@ def test_create_agent_chains_ensure_runtime_and_register():
 
     def fake_execute(_device, argv, **_kwargs):
         seen.append(argv if isinstance(argv, str) else list(argv))
-        if _is_chown(argv):
+        if _is_chown(argv) or _is_infra_script(argv):
             return _ok()
         if argv[:3] == ["mycelium", "room", "create"]:
             return _ok()
         if argv[:3] == ["openclaw", "agents", "list"]:
             return _ok("- agent-alpha")  # already present
+        if len(argv) >= 2 and argv[:2] == ["openclaw", "sessions"]:
+            return _ok("[]")
+        if len(argv) >= 2 and argv[:2] == ["openclaw", "gateway"]:
+            return _ok("ok")
         if argv[:3] == ["mycelium", "agent", "add"]:
             return _ok("added")
         raise AssertionError(f"unexpected: {argv}")
