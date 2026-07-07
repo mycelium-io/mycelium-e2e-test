@@ -360,6 +360,8 @@ YAML
     {
         [ -n "${LLM_API_KEY:-}" ]  && echo "OPENROUTER_API_KEY=$LLM_API_KEY"
         [ -n "${LLM_API_KEY:-}" ]  && echo "ANTHROPIC_API_KEY=$LLM_API_KEY"
+        [ -n "${LLM_BASE_URL:-}" ] && echo "LLM_BASE_URL=$LLM_BASE_URL"
+        [ -n "${LLM_MODEL:-}" ]    && echo "LLM_MODEL=$LLM_MODEL"
         echo "GATEWAY_ALLOW_ALL_USERS=true"
     } > "$HERMES_DIR/.env"
 
@@ -367,6 +369,39 @@ YAML
         || echo "[spoke-entrypoint] adapter add hermes skipped"
     /openclaw/patch-hermes-plugin.sh 2>&1 \
         || echo "[spoke-entrypoint] hermes plugin patch skipped"
+
+    # Route Hermes inference through the same litellm proxy as OpenClaw.
+    # Hermes reads API keys from process env (not ~/.hermes/.env) and defaults
+    # openrouter to openrouter.ai — patch auth.json + default model at boot.
+    if [ -n "${LLM_API_KEY:-}" ]; then
+        HERMES_MODEL="${LLM_MODEL:-anthropic/claude-sonnet-4-20250514}"
+        node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const hermesDir = process.env.HERMES_DIR || '$HERMES_DIR';
+          const authPath = path.join(hermesDir, 'auth.json');
+          const base = (process.env.LLM_BASE_URL || '').replace(/\/$/, '');
+          const baseUrl = base ? (base.endsWith('/v1') ? base : base + '/v1') : '';
+          if (fs.existsSync(authPath) && baseUrl) {
+            const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+            for (const cred of (auth.credential_pool?.openrouter || [])) {
+              cred.base_url = baseUrl;
+              cred.last_status = null;
+              cred.last_error_code = null;
+              cred.last_error_message = null;
+            }
+            fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
+            console.log('[spoke-entrypoint] Hermes openrouter base_url → ' + baseUrl);
+          }
+        " 2>&1 || echo "[spoke-entrypoint] hermes auth.json patch skipped"
+        HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
+            OPENROUTER_API_KEY="${LLM_API_KEY}" ANTHROPIC_API_KEY="${LLM_API_KEY}" \
+            hermes auth reset openrouter 2>/dev/null \
+            || echo "[spoke-entrypoint] hermes auth reset skipped"
+        HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
+            hermes config set model "$HERMES_MODEL" 2>/dev/null \
+            || echo "[spoke-entrypoint] hermes model config skipped"
+    fi
 fi
 
 # ── Build supervisord.conf ──────────────────────────────────────────
@@ -380,6 +415,13 @@ SUPERVISOR_CONF="/tmp/spoke-supervisord.conf"
 # Always pin HOME so mycelium/openclaw do not read /root/.mycelium or /root/.openclaw.
 SPOKE_PROG_ENV='directory=/home/spoke
 environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s"'
+
+# Hermes gateway reads API keys from process env, not ~/.hermes/.env.
+HERMES_PROG_ENV="$SPOKE_PROG_ENV"
+if has_adapter hermes && [ -n "${LLM_API_KEY:-}" ]; then
+    HERMES_PROG_ENV='directory=/home/spoke
+environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s",OPENROUTER_API_KEY="'"${LLM_API_KEY}"'",ANTHROPIC_API_KEY="'"${LLM_API_KEY}"'",GATEWAY_ALLOW_ALL_USERS="true"'
+fi
 
 cat > "$SUPERVISOR_CONF" <<CONF
 [supervisord]
@@ -430,7 +472,7 @@ if has_adapter hermes; then
     cat >> "$SUPERVISOR_CONF" <<CONF
 
 [program:hermes-gateway]
-${SPOKE_PROG_ENV}
+${HERMES_PROG_ENV}
 command=hermes gateway run
 autostart=true
 autorestart=true

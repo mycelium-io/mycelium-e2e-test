@@ -639,8 +639,10 @@ class OpenClawProvisioner(ABCProvisioner):
                         "sessions.reset",
                         "--params",
                         json.dumps({"key": key}),
+                        "--timeout",
+                        "60000",
                     ],
-                    timeout=30.0,
+                    timeout=90.0,
                 )
             except HostExecError as exc:
                 log.warning(
@@ -660,25 +662,46 @@ class OpenClawProvisioner(ABCProvisioner):
 
         self._trim_stale_session_files(device, max_files=1)
 
-    def reset_device_gateway_sessions(self, device: Any) -> None:
-        """Reset every OpenClaw agent on a host between suite scenarios.
+    def reset_device_gateway_sessions(
+        self,
+        device: Any,
+        *,
+        handles: list[str] | None = None,
+    ) -> None:
+        """Reset OpenClaw agents on a host between suite scenarios.
 
         Suite rows reuse the same gateway across scenarios. A prior row can
         leave mycelium-room session metadata that makes the next row's ticks
         fail with ``reply session initialization conflicted`` when multiple
         agents share one gateway (e.g. hub-local oc_oc).
+
+        When ``handles`` is provided, only those agents are reset. Suite
+        hygiene should pass the scenario's agents so unrelated hub agents
+        (e.g. ``agent-gamma`` in a two-agent row) are not disturbed.
         """
         device_label = host_exec.describe(device)
-        handles = sorted(self._list_openclaw_agents(device))
-        if not handles:
+        available = set(self._list_openclaw_agents(device))
+        if handles is None:
+            targets = sorted(available)
+        else:
+            targets = sorted({h for h in handles if h in available})
+            missing = sorted(set(handles) - available)
+            if missing:
+                log.debug(
+                    "openclaw.reset_device_gateway_sessions: skipping unknown handle(s) on %s: %s",
+                    device_label,
+                    ", ".join(missing),
+                )
+        if not targets:
             log.debug("openclaw.reset_device_gateway_sessions: no agents on %s", device_label)
             return
         log.info(
-            "openclaw.reset_device_gateway_sessions: resetting %d agent(s) on %s",
-            len(handles),
+            "openclaw.reset_device_gateway_sessions: resetting %d agent(s) on %s: %s",
+            len(targets),
             device_label,
+            ", ".join(targets),
         )
-        for handle in handles:
+        for handle in targets:
             self.cleanup_agent(
                 device,
                 AgentRef(handle=handle, adapter=self.name, device_name=device_label),

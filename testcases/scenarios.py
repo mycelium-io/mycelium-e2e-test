@@ -717,20 +717,26 @@ class _ScenarioCore(aetest.Testcase):
         Reset every agent on each touched gateway host, then restart the
         gateway so dual-agent hub rows do not inherit stale session state.
         """
-        seen_devices: set[int] = set()
+        device_handles: dict[int, dict[str, Any]] = {}
         for binding in self.agents:
             if binding.ref is None or binding.spec.get("adapter") != "openclaw":
                 continue
             device = binding.device
             device_id = id(device)
-            if device_id in seen_devices:
-                continue
-            seen_devices.add(device_id)
-            provisioner = binding.provisioner
+            entry = device_handles.setdefault(
+                device_id,
+                {"device": device, "handles": [], "provisioner": binding.provisioner},
+            )
+            entry["handles"].append(binding.actual_handle)
+
+        for entry in device_handles.values():
+            device = entry["device"]
+            provisioner = entry["provisioner"]
+            handles = sorted(set(entry["handles"]))
             reset_all = getattr(provisioner, "reset_device_gateway_sessions", None)
             if callable(reset_all):
                 try:
-                    reset_all(device)
+                    reset_all(device, handles=handles)
                 except Exception as exc:  # noqa: BLE001 - best-effort hygiene
                     log.warning(
                         "openclaw device reset failed on %s (continuing): %s",
@@ -738,14 +744,21 @@ class _ScenarioCore(aetest.Testcase):
                         exc,
                     )
                 continue
-            try:
-                provisioner.cleanup_agent(binding.device, binding.ref, self.room)
-            except Exception as exc:  # noqa: BLE001 - best-effort hygiene
-                log.warning(
-                    "openclaw session reset failed for %s (continuing): %s",
-                    binding.actual_handle,
-                    exc,
+            for handle in handles:
+                ref = next(
+                    (b.ref for b in self.agents if b.ref is not None and b.actual_handle == handle),
+                    None,
                 )
+                if ref is None:
+                    continue
+                try:
+                    provisioner.cleanup_agent(device, ref, self.room)
+                except Exception as exc:  # noqa: BLE001 - best-effort hygiene
+                    log.warning(
+                        "openclaw session reset failed for %s (continuing): %s",
+                        handle,
+                        exc,
+                    )
 
     def _chown_mycelium_on_agent_hosts(self) -> None:
         """Reclaim user ownership of ``~/.mycelium`` on each agent host."""
