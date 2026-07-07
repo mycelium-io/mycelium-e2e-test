@@ -50,7 +50,13 @@ start_supervisord() {
 
 if [ "$(id -u)" -eq 0 ] && [ "${SPOKE_BOOTSTRAP_CHILD:-}" != 1 ]; then
     install_cursor_auth
+    for d in .openclaw .hermes .mycelium; do
+        if [ -e "${SPOKE_HOME}/${d}" ]; then
+            chown -R spoke:spoke "${SPOKE_HOME}/${d}" 2>/dev/null || true
+        fi
+    done
     gosu spoke env HOME="${SPOKE_HOME}" SPOKE_BOOTSTRAP_CHILD=1 "$0"
+    chown -R spoke:spoke "${SPOKE_HOME}/.hermes" "${SPOKE_HOME}/.openclaw" "${SPOKE_HOME}/.mycelium" 2>/dev/null || true
     start_supervisord /tmp/spoke-supervisord.conf
 fi
 
@@ -341,6 +347,12 @@ fi
 
 if has_adapter hermes; then
     echo "[spoke-entrypoint] Bootstrapping hermes..."
+    if [ -d "$HERMES_DIR" ] && [ ! -w "$HERMES_DIR" ]; then
+        if command -v gosu >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+            echo "[spoke-entrypoint] Fixing root-owned ${HERMES_DIR}"
+            gosu root chown -R spoke:spoke "$HERMES_DIR"
+        fi
+    fi
     mkdir -p "$HERMES_DIR"
 
     # First-run config: hermes itself writes ~/.hermes/config.yaml on
