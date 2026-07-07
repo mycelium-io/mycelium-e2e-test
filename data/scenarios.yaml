@@ -33,6 +33,10 @@
 #   cursor    cold-spawn per tick; wake = `mycelium agent invoke`; slow
 #   hermes    plugin polls sessions; wake = no-op
 #
+# Each ``agents[]`` entry uses ``role`` (logical participant label).
+# The harness maps roles to runtime handles via pool discovery or
+# explicit agent pools — see ``libs.scenario_row``.
+#
 # When adding rows, prefer reusing an existing ``base_name`` so the
 # matrix grows by combo, not by topic — e.g. a new he-he row reuses
 # ``base_name: TwoAgentConsensus`` and produces
@@ -56,14 +60,14 @@ scenarios:
       consensus → plan → memory → search check. Tightest happy path.
     topic: api-style
     agents:
-      - handle: alpha
+      - role: alpha
         adapter: openclaw
         host: hub
         position: >
           I want REST with OpenAPI; GraphQL is fine for internal tools
           only. Hard limit: no public-facing GraphQL without persisted
           queries.
-      - handle: beta
+      - role: beta
         adapter: openclaw
         host: hub
         position: >
@@ -71,10 +75,10 @@ scenarios:
           us. Compromise: REST acceptable for uploads/webhooks.
     require_consensus: true
     memory_writes:
-      - handle: alpha
+      - role: alpha
         key: decisions/api-style
         value: '{"choice":"see consensus","author":"alpha"}'
-      - handle: beta
+      - role: beta
         key: status/integration
         value: "frontend ready to migrate within 4 weeks"
     search_queries:
@@ -99,13 +103,13 @@ scenarios:
     topic: rollout-cadence
     timeout_seconds: 480       # 8 min — cursor cold-start hostile to default
     agents:
-      - handle: planner
+      - role: planner
         adapter: openclaw
         host: hub
         position: >
           Ship every two weeks; no exceptions. Risk = feature flags +
           incremental rollout.
-      - handle: designer
+      - role: designer
         adapter: cursor
         host: spoke1
         position: >
@@ -122,7 +126,7 @@ scenarios:
       and reaches consensus autonomously.
     topic: logging-verbosity
     agents:
-      - handle: alpha-he
+      - role: alpha-he
         adapter: hermes
         host: hub
         position: >
@@ -131,7 +135,7 @@ scenarios:
           output available for local development if it doesn't add
           maintenance overhead. A dual-format config flag would be
           acceptable.
-      - handle: beta-he
+      - role: beta-he
         adapter: hermes
         host: spoke1
         position: >
@@ -163,7 +167,7 @@ scenarios:
       rationale.
     topic: capacity-planning
     agents:
-      - handle: alpha
+      - role: alpha
         adapter: openclaw
         host: hub
         position: >
@@ -171,7 +175,7 @@ scenarios:
           2 SRE hires, but open to any combination (contractors,
           platform engineer, automation) that visibly cuts pager load
           this quarter.
-      - handle: beta
+      - role: beta
         adapter: openclaw
         host: spoke1
         position: >
@@ -179,7 +183,7 @@ scenarios:
           quantity. Supportive of short-term contractor backfill to
           relieve on-call while we recruit. Comfortable deferring
           additional headcount to Q2 if there's a clear plan.
-      - handle: gamma
+      - role: gamma
         adapter: openclaw
         host: spoke2
         position: >
@@ -204,11 +208,11 @@ scenarios:
       subscription ordering.
     topic: storage-engine
     agents:
-      - handle: alpha-cu
+      - role: alpha-cu
         adapter: cursor
         host: hub
         position: Pick Postgres for everything — we already operate it.
-      - handle: beta-cu
+      - role: beta-cu
         adapter: cursor
         host: spoke1
         position: Split — Postgres for OLTP, ClickHouse for analytics.
@@ -222,11 +226,11 @@ scenarios:
       coordination path (no explicit wake).
     topic: deployment-strategy
     agents:
-      - handle: alpha-he
+      - role: alpha-he
         adapter: hermes
         host: hub
         position: Blue-green on every deploy; rollback within 60s.
-      - handle: beta-he
+      - role: beta-he
         adapter: hermes
         host: spoke1
         position: Canary at 5% → 25% → 100% over 24h.
@@ -247,21 +251,21 @@ scenarios:
       2026-06-18 lab run to bicker for all 20 rounds without consensus.
     topic: incident-response-process
     agents:
-      - handle: alpha-he
+      - role: alpha-he
         adapter: hermes
         host: hub
         position: >
           Top priority: blameless post-mortems and clear ownership. Prefer
           48h for post-mortems but open to 72h when complexity warrants.
           On-call should page the owning team first with a global fallback.
-      - handle: beta-he
+      - role: beta-he
         adapter: hermes
         host: spoke1
         position: >
           Support blameless culture; 72h post-mortems are fine for complex
           incidents. Shared on-call pool is OK short-term if team escalation
           stays in the runbook.
-      - handle: gamma-he
+      - role: gamma-he
         adapter: hermes
         host: spoke2
         position: >
@@ -280,11 +284,11 @@ scenarios:
       simultaneously.
     topic: secrets-management
     agents:
-      - handle: alpha
+      - role: alpha
         adapter: openclaw
         host: hub
         position: Centralize on Vault; deprecate per-env secret files.
-      - handle: beta-he
+      - role: beta-he
         adapter: hermes
         host: spoke1
         position: AWS Secrets Manager — Vault adds an extra dep we don't need.
@@ -298,11 +302,11 @@ scenarios:
       cold-spawn and hermes's polling co-exist on the same session.
     topic: monorepo-or-polyrepo
     agents:
-      - handle: front-cu
+      - role: front-cu
         adapter: cursor
         host: hub
         position: Single monorepo with Bazel — sharing types is killing us.
-      - handle: back-he
+      - role: back-he
         adapter: hermes
         host: spoke1
         position: Polyrepo — coordination tax is small, build complexity is large.
@@ -326,21 +330,21 @@ scenarios:
     topic: observability-budget
     timeout_seconds: 900   # 15 min — cursor cold-spawn × 3 agents
     agents:
-      - handle: planner
+      - role: planner
         adapter: openclaw
         host: hub
         position: >
           Prefer representative sampling for steady-state traffic with
           100% trace on errors and SLO breaches. Open to 5–10% baseline
           sampling if retention stays within budget.
-      - handle: designer
+      - role: designer
         adapter: cursor
         host: spoke1
         position: >
           Support error-biased tracing: ~10% baseline sample plus full
           capture on 5xx/timeouts. Align on 90-day retention and cost
           caps — same goals as planner/ops.
-      - handle: ops
+      - role: ops
         adapter: hermes
         host: spoke2
         position: >
@@ -359,11 +363,11 @@ scenarios:
     description: Mirror of oc-cu — confirms the wake protocol is symmetric.
     topic: caching-tier
     agents:
-      - handle: alpha-cu
+      - role: alpha-cu
         adapter: cursor
         host: hub
         position: Redis everywhere; we already pay for it.
-      - handle: beta
+      - role: beta
         adapter: openclaw
         host: spoke1
         position: Memcached for hot paths; Redis for state.
@@ -375,11 +379,11 @@ scenarios:
     description: Mirror of oc-he.
     topic: auth-provider
     agents:
-      - handle: alpha-he
+      - role: alpha-he
         adapter: hermes
         host: hub
         position: Auth0 — managed service, fewer surprises.
-      - handle: beta
+      - role: beta
         adapter: openclaw
         host: spoke1
         position: Self-host Keycloak — vendor lock-in concern is real.
@@ -391,11 +395,11 @@ scenarios:
     description: Mirror of cu-he.
     topic: ci-runner-pool
     agents:
-      - handle: alpha-he
+      - role: alpha-he
         adapter: hermes
         host: hub
         position: GitHub-hosted runners — zero ops overhead.
-      - handle: beta-cu
+      - role: beta-cu
         adapter: cursor
         host: spoke1
         position: Self-hosted on bare metal — cost + speed.
@@ -412,13 +416,13 @@ scenarios:
     topic: licensing-model
     n_steps_total: 4         # deliberately too short to converge
     agents:
-      - handle: lawyer-a
+      - role: lawyer-a
         adapter: openclaw
         host: hub
         position: >
           GPLv3 only; no exceptions. Hard limit: no commercial
           relicensing under any circumstance.
-      - handle: lawyer-b
+      - role: lawyer-b
         adapter: openclaw
         host: spoke1
         position: >

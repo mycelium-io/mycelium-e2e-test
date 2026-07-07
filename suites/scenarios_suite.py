@@ -33,24 +33,30 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from libs import host_exec  # noqa: E402 - sys.path tweak first
-from libs.host_exec import HostExecError  # noqa: E402 - sys.path tweak first
 from jobs._common import RUNTIME_COMPOSE, TESTBED_NAME_COMPOSE  # noqa: E402
+from libs import host_exec  # noqa: E402 - sys.path tweak first
+from libs.agent_pools import (  # noqa: E402 - sys.path tweak first
+    ensure_pool_slots,
+    load_agent_pools,
+    provision_roles_for_wants,
+    reset_openclaw_pools_for_wants,
+)
+from libs.host_exec import HostExecError  # noqa: E402 - sys.path tweak first
 from libs.lab_redeploy import (  # noqa: E402 - sys.path tweak first
+    _LOCAL_COMPOSE_RUNNER,
     LabCleanupMode,
     LabRedeployConfig,
-    _LOCAL_COMPOSE_RUNNER,
     redeploy_testbed,
     verify_cfn_alignment,
     verify_compose_cfn_alignment,
 )
 from libs.provisioners import (  # noqa: E402 - sys.path tweak first
     AgentRef,
-    PrereqMissing,
     get_provisioner,
 )
-from libs.suite_lifecycle import setup_shared_suite_room, teardown_shared_suite_room  # noqa: E402
+from libs.scenario_row import agent_role  # noqa: E402 - sys.path tweak first
 from libs.sessions import SessionError  # noqa: E402
+from libs.suite_lifecycle import setup_shared_suite_room, teardown_shared_suite_room  # noqa: E402
 from testcases.scenarios import (  # noqa: E402 - sys.path tweak first
     active_tiers,
     filter_by_tier,
@@ -168,7 +174,7 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
        there is no CFN.
     3. ``provision_matrix_agents`` — always runs (unless explicitly
        disabled). Walks ``_ACTIVE_ROWS``, collects unique
-       ``(adapter, handle, host)`` tuples, and calls
+       ``(adapter, role, host)`` tuples, and calls
        ``Provisioner.ensure_runtime`` on each. The resulting
        :class:`AgentRef` map is stashed in
        ``testscript.parameters['provisioned_agents']`` so
@@ -337,22 +343,20 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
 
     @aetest.subsection
     def provision_matrix_agents(self, testscript, testbed=None):
-        """Idempotently provision every agent the active rows need.
+        """Ensure fixed agent pools, map roles→handles, reset gateways.
 
-        For each unique ``(adapter, handle, host)`` in
-        ``_ACTIVE_ROWS``:
+        For each unique ``(adapter, role, host)`` in ``_ACTIVE_ROWS``:
 
-        - Resolve the host name to a pyATS Device on the testbed.
-        - ``check_prereqs(device)`` — surface missing adapters as
-          a single skipped subsection rather than a swarm of
-          per-scenario skips later.
-        - ``ensure_runtime(device, handle)`` — heavyweight idempotent
-          create. Defaults to no-op for cursor/hermes; openclaw
-          actually spawns the OpenClaw runtime + writes a manifest
-          in the bootstrap room.
+        1. Ensure every configured **pool slot** for that host+adapter
+           (e.g. all four hub openclaw agents) — not only roles this
+           tier's rows reference.
+        2. Resolve each row role to a pool handle and stash
+           ``(adapter, role, host) -> AgentRef``.
+        3. Reset openclaw pool slots on touched hosts so the shared
+           suite room starts from a clean gateway.
 
-        Stashes a ``(adapter, handle, host) -> AgentRef`` map in
-        ``testscript.parameters['provisioned_agents']``.
+        Stashes ``agent_pools`` and ``provisioned_agents`` in
+        ``testscript.parameters``.
 
         Opt out via ``MYCELIUM_E2E_SKIP_AGENT_PROVISIONING=1`` for
         environments where agents are pre-baked and creating them
@@ -382,20 +386,23 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
             testscript.parameters["provisioned_agents"] = {}
             return
 
-        # Build a deduped set of (adapter, handle, host) tuples
-        # across every active row. Keys use the *spec* handle from
+        # Build a deduped set of (adapter, role, host) tuples
+        # across every active row. Keys use the *role* from
         # scenarios.yaml; values may reference a different actual handle
         # when an existing agent was discovered and reused.
         wants: set[tuple[str, str, str]] = set()
         for row in _ACTIVE_ROWS:
             for ag in row.get("agents", []):
-                wants.add((ag["adapter"], ag["handle"], ag["host"]))
+                wants.add((ag["adapter"], agent_role(ag), ag["host"]))
 
         log.info(
-            "provision_matrix_agents: ensuring %d unique agent(s) across %d row(s)",
+            "provision_matrix_agents: %d role(s) across %d row(s)",
             len(wants),
             len(_ACTIVE_ROWS),
         )
+
+        pools = load_agent_pools(testscript.parameters)
+        testscript.parameters["agent_pools"] = pools
 
         # Reclaim ownership of ``~/.mycelium`` on each host we'll
         # touch. The backend (Docker container, runs as root) creates
@@ -422,108 +429,9 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
             except HostExecError as exc:
                 log.warning("  ↳ chown failed on %s (continuing): %s", host, exc)
 
-        # ── Phase 1: discover already-present, healthy agents ──────────
-        # Build a per-(adapter, host) pool of reusable agents so we don't
-        # recreate runtimes that are already configured and working.
-        # Each provisioner's discover_available() implements its own
-        # liveness probe (openclaw: gateway ping; hermes: listing only;
-        # cursor: always returns [] since it creates fresh per scenario).
-        available_pools: dict[tuple[str, str], list[AgentRef]] = {}
-        for adapter, host in sorted({(a, h) for (a, _, h) in wants}):
-            device = testbed.devices.get(host)
-            if device is None:
-                continue
-            try:
-                provisioner = get_provisioner(adapter)
-            except KeyError:
-                continue
-            try:
-                found = provisioner.discover_available(device)
-            except Exception as exc:  # noqa: BLE001 - discovery is best-effort
-                log.warning(
-                    "  discover_available(%s, %s) failed: %s — will create fresh",
-                    adapter,
-                    host,
-                    exc,
-                )
-                found = []
-            available_pools[(adapter, host)] = list(found)
-            if found:
-                log.info(
-                    "  discover: %d existing %s agent(s) on %s: %s",
-                    len(found),
-                    adapter,
-                    host,
-                    [r.handle for r in found],
-                )
-            else:
-                log.info("  discover: no existing %s agents on %s", adapter, host)
-
-        # ── Phase 2: allocate from pool or ensure_runtime ──────────────
-        provisioned: dict[tuple[str, str, str], AgentRef] = {}
-        failures: list[str] = []
-        for adapter, handle, host in sorted(wants):
-            device = testbed.devices.get(host)
-            if device is None:
-                failures.append(f"{handle}@{host}: testbed has no device named {host!r}")
-                continue
-
-            try:
-                provisioner = get_provisioner(adapter)
-            except KeyError as exc:
-                failures.append(f"{handle}@{host}: {exc}")
-                continue
-
-            try:
-                provisioner.check_prereqs(device)
-            except (PrereqMissing, HostExecError) as exc:
-                failures.append(f"{handle}@{host} ({adapter}): prereq missing — {exc}")
-                continue
-
-            pool = available_pools.get((adapter, host), [])
-            # Prefer an exact handle match from the pool so that named agents
-            # (e.g. hermes alpha-he) are reused when already bootstrapped.
-            # Fall back to the first available slot; if nothing matches and
-            # the pool is empty, ensure_runtime creates a fresh agent.
-            exact_idx = next(
-                (i for i, r in enumerate(pool) if r.handle == handle), None
-            )
-            if exact_idx is not None:
-                ref = pool.pop(exact_idx)
-                log.info(
-                    "  ✓ %s/%s on %s → reusing existing agent %r (exact match)",
-                    adapter,
-                    handle,
-                    host,
-                    ref.handle,
-                )
-            elif pool and not getattr(provisioner, "requires_exact_handle", False):
-                ref = pool.pop(0)
-                log.info(
-                    "  ✓ %s/%s on %s → reusing existing agent %r",
-                    adapter,
-                    handle,
-                    host,
-                    ref.handle,
-                )
-            else:
-                try:
-                    ref = provisioner.ensure_runtime(device, handle)
-                except PrereqMissing as exc:
-                    failures.append(f"{handle}@{host} ({adapter}): ensure_runtime — {exc}")
-                    continue
-                except HostExecError as exc:
-                    failures.append(f"{handle}@{host} ({adapter}): transport — {exc}")
-                    continue
-                log.info(
-                    "  ✓ %s/%s on %s → created (pre_existing=%s)",
-                    adapter,
-                    handle,
-                    host,
-                    ref.metadata.get("pre_existing", "n/a"),
-                )
-
-            provisioned[(adapter, handle, host)] = ref
+        slot_failures = ensure_pool_slots(testbed, wants, pools)
+        provisioned, role_failures = provision_roles_for_wants(testbed, wants, pools)
+        failures = slot_failures + role_failures
 
         testscript.parameters["provisioned_agents"] = provisioned
 
@@ -538,6 +446,8 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
                 self,
                 f"provision_matrix_agents: {len(failures)} agent(s) could not be ensured:\n  {joined}",
             )
+
+        reset_openclaw_pools_for_wants(testbed, wants, pools)
 
         try:
             setup_shared_suite_room(testscript, testbed, wants)
@@ -582,13 +492,13 @@ class MatrixCommonCleanup(aetest.CommonCleanup):
             log.info("teardown_matrix_agents: nothing to tear down")
             return
 
-        for (adapter, handle, host), ref in sorted(provisioned.items()):
+        for (adapter, role, host), ref in sorted(provisioned.items()):
             device = testbed.devices.get(host)
             if device is None:
                 log.warning(
                     "teardown_matrix_agents: %s/%s — device %r vanished, skipping",
                     adapter,
-                    handle,
+                    role,
                     host,
                 )
                 continue
@@ -601,19 +511,19 @@ class MatrixCommonCleanup(aetest.CommonCleanup):
                 log.warning(
                     "teardown_matrix_agents: %s/%s — provisioner %r gone, skipping",
                     adapter,
-                    handle,
+                    role,
                     adapter,
                 )
                 continue
 
             try:
                 provisioner.teardown_runtime(device, ref)
-                log.info("  ✓ tore down %s/%s on %s", adapter, handle, host)
+                log.info("  ✓ tore down %s/%s on %s", adapter, role, host)
             except Exception as exc:  # noqa: BLE001 - teardown is best-effort
                 log.warning(
                     "  ✗ %s/%s teardown failed (ignored): %s",
                     adapter,
-                    handle,
+                    role,
                     exc,
                 )
 
