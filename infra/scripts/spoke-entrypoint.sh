@@ -387,25 +387,27 @@ YAML
     # openrouter to openrouter.ai — patch auth.json + default model at boot.
     if [ -n "${LLM_API_KEY:-}" ]; then
         HERMES_MODEL="${LLM_MODEL:-anthropic/claude-sonnet-4-20250514}"
-        node -e "
-          const fs = require('fs');
-          const path = require('path');
-          const hermesDir = process.env.HERMES_DIR || '$HERMES_DIR';
-          const authPath = path.join(hermesDir, 'auth.json');
-          const base = (process.env.LLM_BASE_URL || '').replace(/\/$/, '');
-          const baseUrl = base ? (base.endsWith('/v1') ? base : base + '/v1') : '';
-          if (fs.existsSync(authPath) && baseUrl) {
-            const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-            for (const cred of (auth.credential_pool?.openrouter || [])) {
-              cred.base_url = baseUrl;
-              cred.last_status = null;
-              cred.last_error_code = null;
-              cred.last_error_message = null;
-            }
-            fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
-            console.log('[spoke-entrypoint] Hermes openrouter base_url → ' + baseUrl);
-          }
-        " 2>&1 || echo "[spoke-entrypoint] hermes auth.json patch skipped"
+        HERMES_LITELLM_BASE="${LLM_BASE_URL:-}"
+        HERMES_LITELLM_BASE="${HERMES_LITELLM_BASE%/}"
+        if [ -n "$HERMES_LITELLM_BASE" ] && [ "${HERMES_LITELLM_BASE##*/}" != "v1" ]; then
+            HERMES_LITELLM_BASE="${HERMES_LITELLM_BASE}/v1"
+        fi
+        if [ -n "$HERMES_LITELLM_BASE" ] && [ -f "$HERMES_DIR/auth.json" ]; then
+            node -e "
+              const fs = require('fs');
+              const authPath = '$HERMES_DIR/auth.json';
+              const baseUrl = '$HERMES_LITELLM_BASE';
+              const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+              for (const cred of (auth.credential_pool?.openrouter || [])) {
+                cred.base_url = baseUrl;
+                cred.last_status = null;
+                cred.last_error_code = null;
+                cred.last_error_message = null;
+              }
+              fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
+              console.log('[spoke-entrypoint] Hermes openrouter base_url → ' + baseUrl);
+            " 2>&1 || echo "[spoke-entrypoint] hermes auth.json patch skipped"
+        fi
         HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
             OPENROUTER_API_KEY="${LLM_API_KEY}" ANTHROPIC_API_KEY="${LLM_API_KEY}" \
             hermes auth reset openrouter 2>/dev/null \
@@ -413,6 +415,19 @@ YAML
         HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
             hermes config set model "$HERMES_MODEL" 2>/dev/null \
             || echo "[spoke-entrypoint] hermes model config skipped"
+        if [ -n "$HERMES_LITELLM_BASE" ] && [ -f "$HERMES_DIR/auth.json" ]; then
+            node -e "
+              const fs = require('fs');
+              const authPath = '$HERMES_DIR/auth.json';
+              const baseUrl = '$HERMES_LITELLM_BASE';
+              const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+              for (const cred of (auth.credential_pool?.openrouter || [])) {
+                cred.base_url = baseUrl;
+                cred.last_status = null;
+              }
+              fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
+            " 2>/dev/null || true
+        fi
     fi
 fi
 
