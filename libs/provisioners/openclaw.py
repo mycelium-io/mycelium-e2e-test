@@ -658,7 +658,42 @@ class OpenClawProvisioner(ABCProvisioner):
                     proc.stderr.strip()[:200],
                 )
 
-        self._trim_stale_session_files(device)
+        self._trim_stale_session_files(device, max_files=1)
+
+    def reset_device_gateway_sessions(self, device: Any) -> None:
+        """Reset every OpenClaw agent on a host between suite scenarios.
+
+        Suite rows reuse the same gateway across scenarios. A prior row can
+        leave mycelium-room session metadata that makes the next row's ticks
+        fail with ``reply session initialization conflicted`` when multiple
+        agents share one gateway (e.g. hub-local oc_oc).
+        """
+        device_label = host_exec.describe(device)
+        handles = sorted(self._list_openclaw_agents(device))
+        if not handles:
+            log.debug("openclaw.reset_device_gateway_sessions: no agents on %s", device_label)
+            return
+        log.info(
+            "openclaw.reset_device_gateway_sessions: resetting %d agent(s) on %s",
+            len(handles),
+            device_label,
+        )
+        for handle in handles:
+            self.cleanup_agent(
+                device,
+                AgentRef(handle=handle, adapter=self.name, device_name=device_label),
+                room="",
+            )
+        self._trim_stale_session_files(device, max_files=1)
+        try:
+            host_exec.execute(device, ["/openclaw/restart-openclaw-gateway.sh"], timeout=30.0)
+            host_exec.execute(device, ["sleep", "3"], timeout=10.0)
+        except HostExecError as exc:
+            log.warning(
+                "openclaw.reset_device_gateway_sessions: gateway restart/wait failed on %s: %s",
+                device_label,
+                exc,
+            )
 
     def _trim_stale_session_files(self, device: Any, *, max_files: int = 3) -> None:
         """Remove excess per-agent ``.jsonl`` session files on the gateway host."""

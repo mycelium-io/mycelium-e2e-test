@@ -714,15 +714,32 @@ class _ScenarioCore(aetest.Testcase):
         """Reset OpenClaw mycelium-room sessions between suite scenarios.
 
         Suite mode keeps agents registered to one parent room across rows.
-        Without a gateway ``sessions.reset`` between scenarios, negotiation
-        ticks land in hundred-message histories and agents stop posting
-        ``mycelium negotiate respond``.
+        Reset every agent on each touched gateway host, then restart the
+        gateway so dual-agent hub rows do not inherit stale session state.
         """
+        seen_devices: set[int] = set()
         for binding in self.agents:
             if binding.ref is None or binding.spec.get("adapter") != "openclaw":
                 continue
+            device = binding.device
+            device_id = id(device)
+            if device_id in seen_devices:
+                continue
+            seen_devices.add(device_id)
+            provisioner = binding.provisioner
+            reset_all = getattr(provisioner, "reset_device_gateway_sessions", None)
+            if callable(reset_all):
+                try:
+                    reset_all(device)
+                except Exception as exc:  # noqa: BLE001 - best-effort hygiene
+                    log.warning(
+                        "openclaw device reset failed on %s (continuing): %s",
+                        getattr(device, "name", device),
+                        exc,
+                    )
+                continue
             try:
-                binding.provisioner.cleanup_agent(binding.device, binding.ref, self.room)
+                provisioner.cleanup_agent(binding.device, binding.ref, self.room)
             except Exception as exc:  # noqa: BLE001 - best-effort hygiene
                 log.warning(
                     "openclaw session reset failed for %s (continuing): %s",

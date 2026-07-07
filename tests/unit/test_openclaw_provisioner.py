@@ -483,6 +483,30 @@ def test_cleanup_agent_resets_listed_sessions():
     assert "mycelium-room:r1:session:abc" in reset_calls[0][0][-1]
 
 
+def test_reset_device_gateway_sessions_resets_every_agent_and_restarts():
+    prov = OpenClawProvisioner()
+
+    def fake_execute(_device, argv, **_kwargs):
+        if isinstance(argv, list) and argv[:3] == ["openclaw", "agents", "list"]:
+            return _ok("- agent-alpha\n- agent-beta")
+        if isinstance(argv, list) and argv[:2] == ["openclaw", "sessions"]:
+            return _ok("[]")
+        if isinstance(argv, str) and ".openclaw/agents/" in argv:
+            return _ok()
+        if argv == ["/openclaw/restart-openclaw-gateway.sh"]:
+            return _ok()
+        if argv == ["sleep", "3"]:
+            return _ok()
+        return _ok()
+
+    with patch("libs.host_exec.execute", side_effect=fake_execute) as mock_exec:
+        prov.reset_device_gateway_sessions(_device())
+
+    argv_lists = [c[0][1] for c in mock_exec.call_args_list if isinstance(c[0][1], list)]
+    assert ["/openclaw/restart-openclaw-gateway.sh"] in argv_lists
+    assert ["sleep", "3"] in argv_lists
+
+
 # ── discover_available ───────────────────────────────────────────────
 
 
