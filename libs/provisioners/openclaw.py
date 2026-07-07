@@ -127,7 +127,6 @@ class OpenClawProvisioner(ABCProvisioner):
                 device_label,
             )
             self._install_openclaw_skills(device, handle)
-            self._patch_openclaw_plugin(device)
             return AgentRef(
                 handle=handle,
                 adapter=self.name,
@@ -215,7 +214,6 @@ class OpenClawProvisioner(ABCProvisioner):
             log.debug("openclaw.ensure_runtime: post-create chown failed: %s", exc)
 
         self._install_openclaw_skills(device, handle)
-        self._patch_openclaw_plugin(device)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -327,12 +325,6 @@ class OpenClawProvisioner(ABCProvisioner):
             "--description",
             f"matrix-scenario {handle} in {room}",
         ]
-        # Drop stale gateway context before adopting into a new negotiation.
-        self.cleanup_agent(
-            device,
-            AgentRef(handle=handle, adapter=self.name, device_name=str(device)),
-            room,
-        )
         try:
             result = host_exec.execute(device, argv, timeout=30.0)
         except HostExecError as exc:
@@ -365,7 +357,6 @@ class OpenClawProvisioner(ABCProvisioner):
             )
 
         self._install_openclaw_skills(device, handle)
-        self._patch_openclaw_plugin(device)
         return AgentRef(
             handle=handle,
             adapter=self.name,
@@ -514,11 +505,12 @@ class OpenClawProvisioner(ABCProvisioner):
                 exc,
             )
 
-    def _patch_openclaw_plugin(self, device: Any) -> None:
-        """Apply infra-side OpenClaw plugin patches and restart the gateway."""
+    def _patch_openclaw_plugin(self, device: Any, *, restart: bool = False) -> None:
+        """Apply infra-side OpenClaw plugin patches; optional gateway restart."""
         try:
             host_exec.execute(device, ["/openclaw/patch-openclaw-plugin.sh"], timeout=30.0)
-            host_exec.execute(device, ["/openclaw/restart-openclaw-gateway.sh"], timeout=20.0)
+            if restart:
+                host_exec.execute(device, ["/openclaw/restart-openclaw-gateway.sh"], timeout=20.0)
         except HostExecError as exc:
             log.warning(
                 "openclaw: plugin patch failed on %s: %s",
@@ -648,7 +640,7 @@ class OpenClawProvisioner(ABCProvisioner):
                         "--params",
                         json.dumps({"key": key}),
                     ],
-                    timeout=15.0,
+                    timeout=30.0,
                 )
             except HostExecError as exc:
                 log.warning(
