@@ -25,7 +25,8 @@
 set -euo pipefail
 
 # When the container starts as root (compose spoke image), install host secrets
-# with spoke ownership then re-exec this script as the spoke user.
+# with spoke ownership, run bootstrap as spoke, then start supervisord as root
+# (root supervisord can spawn spoke-owned programs and wire stdout to fd 1).
 SPOKE_HOME="/home/spoke"
 install_cursor_auth() {
     local src=/run/host-secrets/cursor-auth.json
@@ -38,12 +39,23 @@ install_cursor_auth() {
     echo "[spoke-entrypoint] Installed cursor auth for spoke user"
 }
 
-if [ "$(id -u)" -eq 0 ] && [ "${1:-}" != "--as-spoke-user" ]; then
+start_supervisord() {
+    local conf="$1"
+    if [ "$(id -u)" -eq 0 ]; then
+        awk '/^\[program:/ { print; print "user=spoke"; next }1' "$conf" > "${conf}.root"
+        mv "${conf}.root" "$conf"
+    fi
+    exec /usr/bin/supervisord -c "$conf"
+}
+
+if [ "$(id -u)" -eq 0 ] && [ "${SPOKE_BOOTSTRAP_CHILD:-}" != 1 ]; then
     install_cursor_auth
-    exec gosu spoke env HOME="${SPOKE_HOME}" "$0" --as-spoke-user "$@"
+    gosu spoke env HOME="${SPOKE_HOME}" SPOKE_BOOTSTRAP_CHILD=1 "$0"
+    start_supervisord /tmp/spoke-supervisord.conf
 fi
-if [ "${1:-}" = "--as-spoke-user" ]; then
-    shift
+
+if [ "${SPOKE_BOOTSTRAP_CHILD:-}" = 1 ]; then
+    export HOME="${SPOKE_HOME}"
 fi
 
 # ── Inputs ──────────────────────────────────────────────────────────
@@ -427,4 +439,8 @@ cat "$SUPERVISOR_CONF"
 echo "------"
 echo "[spoke-entrypoint] Starting supervisord..."
 
-exec /usr/bin/supervisord -c "$SUPERVISOR_CONF"
+if [ "${SPOKE_BOOTSTRAP_CHILD:-}" = 1 ]; then
+    exit 0
+fi
+
+start_supervisord "$SUPERVISOR_CONF"
