@@ -369,7 +369,6 @@ cat > "$SUPERVISOR_CONF" <<CONF
 nodaemon=true
 logfile=/tmp/supervisord.log
 loglevel=info
-user=spoke
 
 [program:metrics-collector]
 command=mycelium metrics collect --foreground
