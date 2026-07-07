@@ -50,13 +50,13 @@ start_supervisord() {
 
 if [ "$(id -u)" -eq 0 ] && [ "${SPOKE_BOOTSTRAP_CHILD:-}" != 1 ]; then
     install_cursor_auth
-    for d in .openclaw .hermes .mycelium; do
-        if [ -e "${SPOKE_HOME}/${d}" ]; then
-            chown -R spoke:spoke "${SPOKE_HOME}/${d}" 2>/dev/null || true
-        fi
-    done
+    if [ -d "${SPOKE_HOME}/.hermes" ]; then
+        chown -R spoke:spoke "${SPOKE_HOME}/.hermes" 2>/dev/null || true
+    fi
     gosu spoke env HOME="${SPOKE_HOME}" SPOKE_BOOTSTRAP_CHILD=1 "$0"
-    chown -R spoke:spoke "${SPOKE_HOME}/.hermes" "${SPOKE_HOME}/.openclaw" "${SPOKE_HOME}/.mycelium" 2>/dev/null || true
+    if [ -d "${SPOKE_HOME}/.hermes" ]; then
+        chown -R spoke:spoke "${SPOKE_HOME}/.hermes" 2>/dev/null || true
+    fi
     start_supervisord /tmp/spoke-supervisord.conf
 fi
 
