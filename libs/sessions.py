@@ -217,6 +217,53 @@ def memory_set(
         )
 
 
+def memory_get(
+    device: Any,
+    room: str,
+    key: str,
+    *,
+    timeout: float = 30.0,
+) -> str:
+    """Read a memory key; returns stdout body."""
+    try:
+        result = host_exec.execute(
+            device,
+            ["mycelium", "memory", "get", "--room", room, key],
+            timeout=timeout,
+        )
+    except HostExecError as exc:
+        raise SessionError(f"memory_get: dispatch failed: {exc}") from exc
+    if result.returncode != 0:
+        raise SessionError(
+            f"memory_get({key!r}) failed (rc={result.returncode}): "
+            f"{(result.stderr or result.stdout).strip()[:300]}"
+        )
+    return result.stdout
+
+
+def memory_ls(
+    device: Any,
+    room: str,
+    *,
+    namespace: str | None = None,
+    timeout: float = 30.0,
+) -> str:
+    """List memory keys in *room*; optional *namespace* prefix filter."""
+    argv = ["mycelium", "memory", "ls", "--room", room]
+    if namespace:
+        argv.append(namespace)
+    try:
+        result = host_exec.execute(device, argv, timeout=timeout)
+    except HostExecError as exc:
+        raise SessionError(f"memory_ls: dispatch failed: {exc}") from exc
+    if result.returncode != 0:
+        raise SessionError(
+            f"memory_ls({room!r}) failed (rc={result.returncode}): "
+            f"{(result.stderr or result.stdout).strip()[:300]}"
+        )
+    return result.stdout
+
+
 def memory_search(
     device: Any,
     room: str,
@@ -312,13 +359,29 @@ def read_plan_tasks(
     room: str,
     *,
     timeout: float = 15.0,
+    backend_url: str | None = None,
 ) -> str:
-    """Read the room's shared plan via ``mycelium memory get plan/tasks``.
+    """Read the room's shared plan checklist body.
 
-    Returns the raw markdown body. Raises ``SessionError`` when the key
-    is missing - scenarios that require a plan file fail loudly so the
-    plan-compiler regression is visible in CI output.
+    When *backend_url* is set (compose/lab HTTP path), reads ``plan/tasks`` from
+    the backend API — the plan compiler writes to the backend data volume, not
+    the spoke container's local ``~/.mycelium``.  Otherwise uses
+    ``mycelium memory get plan/tasks`` on *device*.
     """
+    if backend_url:
+        from libs.mycelium_api import MyceliumAPI
+
+        api = MyceliumAPI(backend_url)
+        status, data = api.get_plan(room)
+        if status != 200 or not isinstance(data, dict):
+            raise SessionError(
+                f"read_plan_tasks({room!r}) via API failed (status={status})"
+            )
+        for file in data.get("files") or []:
+            if file.get("slug") == "tasks":
+                return str(file.get("content") or "")
+        raise SessionError(f"read_plan_tasks({room!r}): plan/tasks not in API response")
+
     try:
         result = host_exec.execute(
             device,

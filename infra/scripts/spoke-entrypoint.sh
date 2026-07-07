@@ -24,6 +24,28 @@
 
 set -euo pipefail
 
+# When the container starts as root (compose spoke image), install host secrets
+# with spoke ownership then re-exec this script as the spoke user.
+SPOKE_HOME="/home/spoke"
+install_cursor_auth() {
+    local src=/run/host-secrets/cursor-auth.json
+    local dst="${SPOKE_HOME}/.config/cursor/auth.json"
+    if [ ! -s "$src" ]; then
+        return 0
+    fi
+    install -d -o spoke -g spoke -m 700 "${SPOKE_HOME}/.config/cursor"
+    install -o spoke -g spoke -m 600 "$src" "$dst"
+    echo "[spoke-entrypoint] Installed cursor auth for spoke user"
+}
+
+if [ "$(id -u)" -eq 0 ] && [ "${1:-}" != "--as-spoke-user" ]; then
+    install_cursor_auth
+    exec gosu spoke env HOME="${SPOKE_HOME}" "$0" --as-spoke-user "$@"
+fi
+if [ "${1:-}" = "--as-spoke-user" ]; then
+    shift
+fi
+
 # ── Inputs ──────────────────────────────────────────────────────────
 
 ROLE="${OPENCLAW_ROLE:-spoke1}"
@@ -296,12 +318,8 @@ if has_adapter cursor; then
         echo "[spoke-entrypoint] ERROR: cursor-agent binary missing from image" >&2
         exit 1
     fi
-    # The cursor-agent auth file is expected to be mounted at
-    # ~/.config/cursor/auth.json by the compose stack. If it's not
-    # present we log a warning but keep going — tests that need cursor
-    # will fail with a clearer error from the provisioner.
-    if [ ! -f "$HOME/.config/cursor/auth.json" ]; then
-        echo "[spoke-entrypoint] WARNING: cursor auth.json not mounted; cursor tests will fail"
+    if [ ! -r "$HOME/.config/cursor/auth.json" ]; then
+        echo "[spoke-entrypoint] WARNING: cursor auth.json not readable; cursor tests will fail"
     fi
     mycelium adapter add cursor --yes 2>&1 \
         || echo "[spoke-entrypoint] adapter add cursor skipped"
@@ -330,6 +348,7 @@ YAML
     {
         [ -n "${LLM_API_KEY:-}" ]  && echo "OPENROUTER_API_KEY=$LLM_API_KEY"
         [ -n "${LLM_API_KEY:-}" ]  && echo "ANTHROPIC_API_KEY=$LLM_API_KEY"
+        echo "GATEWAY_ALLOW_ALL_USERS=true"
     } > "$HERMES_DIR/.env"
 
     mycelium adapter add hermes --yes 2>&1 \

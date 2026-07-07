@@ -748,7 +748,11 @@ class _ConsensusScenario(_ScenarioCore):
             self.failed("consensus not reached — plan/tasks.md assertion requires agreement")
 
         try:
-            body = sessions.read_plan_tasks(self.control_device, self.room)
+            body = sessions.read_plan_tasks(
+                self.control_device,
+                self.room,
+                backend_url=self.backend_url,
+            )
         except SessionError as exc:
             self.failed(f"plan/tasks.md missing or unreadable: {exc}")
         if "- [ ]" not in body and "- [x]" not in body:
@@ -793,9 +797,29 @@ class _FullScenario(_ConsensusScenario):
 
         time.sleep(2)
 
+        stub_embeddings = os.environ.get("MYCELIUM_STUB_EMBEDDINGS", "").strip().lower() not in (
+            "",
+            "0",
+            "false",
+        )
+
         for q in queries:
             query = q["query"]
             expected = q.get("expected_substring", "")
+            if stub_embeddings and expected:
+                # Stub vectors are not semantic — verify the memory key exists.
+                key = expected if "/" in expected else f"decisions/{expected}"
+                try:
+                    body = sessions.memory_get(self.control_device, self.room, key)
+                except SessionError:
+                    body = sessions.memory_ls(self.control_device, self.room, namespace="decisions")
+                if expected not in body:
+                    self.failed(
+                        f"search stub-mode check for {query!r}: "
+                        f"expected substring {expected!r} not found in memory: {body[:400]!r}"
+                    )
+                continue
+
             stdout = sessions.memory_search(self.control_device, self.room, query)
             if expected and expected not in stdout:
                 self.failed(f"search {query!r}: expected substring {expected!r} not found in: {stdout[:400]!r}")

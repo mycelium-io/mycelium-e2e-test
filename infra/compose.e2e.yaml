@@ -292,7 +292,7 @@ services:
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
     volumes:
       - e2e-shared:/shared:ro
-      - ${HOST_CURSOR_AUTH:-/dev/null}:/home/spoke/.config/cursor/auth.json:ro
+      - ${HOST_CURSOR_AUTH:-/dev/null}:/run/host-secrets/cursor-auth.json:ro
     ports:
       - "${E2E_OPENCLAW_PORT:-18789}:18789"
     healthcheck:
@@ -347,7 +347,7 @@ services:
       - e2e-shared:/shared:ro
       # Host cursor auth (optional; left as an explicit empty default
       # so compose doesn't choke when the file is absent).
-      - ${HOST_CURSOR_AUTH:-/dev/null}:/home/spoke/.config/cursor/auth.json:ro
+      - ${HOST_CURSOR_AUTH:-/dev/null}:/run/host-secrets/cursor-auth.json:ro
     ports:
       - "${E2E_SPOKE1_PORT:-18790}:18789"
     healthcheck:
@@ -383,7 +383,7 @@ services:
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
     volumes:
       - e2e-shared:/shared:ro
-      - ${HOST_CURSOR_AUTH:-/dev/null}:/home/spoke/.config/cursor/auth.json:ro
+      - ${HOST_CURSOR_AUTH:-/dev/null}:/run/host-secrets/cursor-auth.json:ro
     ports:
       - "${E2E_SPOKE2_PORT:-18791}:18789"
     healthcheck:

@@ -137,7 +137,7 @@ RUN WHEEL="$(ls /tmp/mycelium_cli*.whl | head -1)" \
 
 FROM spoke-dev AS spoke
 WORKDIR /openclaw
-USER spoke
+USER root
 
 RUN openclaw plugins install @openclaw/matrix \
     && openclaw plugins enable matrix
