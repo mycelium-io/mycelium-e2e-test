@@ -188,20 +188,23 @@ scenarios:
         adapter: openclaw
         host: hub
         position: >
-          90-day retention for all event logs; 7-year archive for
-          compliance records. Cost-optimised with tiered storage.
+          60-day hot retention for all event logs with automated
+          tiering to cold storage after that. Compliance records
+          kept 7 years. Cost matters but so does auditability.
       - role: alpha-he
         adapter: hermes
         host: hub
         position: >
-          30-day hot retention is sufficient for ops. Anything older
-          moves to cold archive with a 24-hour retrieval SLA.
+          45-day hot retention covers 99% of operational needs.
+          Cold tier after 45 days is fine — retrieval SLA of 4 hours
+          is acceptable. Compliance records 7 years, no argument there.
       - role: alpha-cu
         adapter: cursor
         host: hub
         position: >
-          Retention driven by data classification: PII purged after
-          30 days, non-PII retained 1 year, compliance records 7 years.
+          Tiered by classification: ops logs 60 days hot, PII data
+          purged at 45 days, non-PII 90 days, compliance 7 years.
+          Prefer a policy that unifies hot-tier duration across classes.
     require_consensus: false
 
   # A second PR row to ensure cross-family openclaw/cursor coordination
