@@ -657,14 +657,21 @@ class _ScenarioCore(aetest.Testcase):
         require_consensus = self.row.get("require_consensus", True)
         if require_consensus and not outcome.reached:
             self.failed(f"consensus not reached (state={outcome.state}, broken={outcome.broken}); raw={outcome.raw!r}")
-        if not require_consensus and outcome.state == "consensus" and not outcome.broken:
-            # The row was tagged as "expected to time out" but we got
-            # an agreement instead — surface this as a soft signal
-            # rather than failing, since unexpected convergence is
-            # usually fine.
-            log.info(
-                "row expected timeout but consensus reached; not failing",
-            )
+        if not require_consensus:
+            if outcome.broken:
+                # broken=True means the coordination engine itself failed
+                # (e.g. CFN /start returned 500), not just that agents
+                # didn't converge. Even for shakedown rows this is a real
+                # failure — the session never ran.
+                self.failed(
+                    f"session ended broken (state={outcome.state}); "
+                    f"coordination engine failure, not a negotiation timeout; "
+                    f"raw={outcome.raw!r}"
+                )
+            if outcome.state == "consensus":
+                # The row was tagged as "expected to time out" but we got
+                # an agreement instead — surface as a soft signal, not a fail.
+                log.info("row expected timeout but consensus reached; not failing")
 
     @aetest.cleanup
     def cleanup(self) -> None:
