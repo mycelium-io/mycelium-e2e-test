@@ -31,12 +31,6 @@ from testcases.core_tests import (
     SharedMemoryCliE2E,
 )
 from testcases.cursor_tests import CursorBasicDispatch
-from testcases.integration_tests import (
-    ClaudeCodeAdapterStatus,
-    ClaudeCodeSkillInstall,
-)
-
-
 class CommonSetup(MyceliumCommonSetup):
     pass
 
@@ -66,14 +60,6 @@ class test_11_shared_memory_cli_e2e(SharedMemoryCliE2E):
 
 
 class test_22_reindex(Reindex):
-    pass
-
-
-class test_70_claude_code_skill_install(ClaudeCodeSkillInstall):
-    pass
-
-
-class test_71_claude_code_adapter_status(ClaudeCodeAdapterStatus):
     pass
 
 

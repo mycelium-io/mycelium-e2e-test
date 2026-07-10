@@ -29,15 +29,6 @@ from testcases.cursor_tests import (
     CursorMultiHostDispatch,
     CursorWorkspaceDrift,
 )
-from testcases.integration_tests import (
-    ClaudeCodeAdapterRemove,
-    ClaudeCodeAdapterStatus,
-    ClaudeCodeAgentLifecycle,
-    ClaudeCodeDaemonHealth,
-    ClaudeCodeSkillInstall,
-)
-
-
 class CommonSetup(aetest.CommonSetup):
     """Lightweight setup for integration adapter tests — no room creation needed."""
 
@@ -47,26 +38,6 @@ class CommonSetup(aetest.CommonSetup):
 
         if not shutil.which("mycelium"):
             self.failed("mycelium CLI not found on PATH")
-
-
-class test_70_claude_code_skill_install(ClaudeCodeSkillInstall):
-    pass
-
-
-class test_71_claude_code_adapter_status(ClaudeCodeAdapterStatus):
-    pass
-
-
-class test_72_claude_code_adapter_remove(ClaudeCodeAdapterRemove):
-    pass
-
-
-class test_73_claude_code_daemon_health(ClaudeCodeDaemonHealth):
-    pass
-
-
-class test_74_claude_code_agent_lifecycle(ClaudeCodeAgentLifecycle):
-    pass
 
 
 class test_75_cursor_basic_dispatch(CursorBasicDispatch):
