@@ -1,0 +1,27 @@
+---
+# All-in-one testbed — single device, all services on localhost.
+#
+# Uses transport: local so host_exec runs commands directly as
+# subprocess rather than via SSH or docker exec. Designed for
+# single-device validation on oclw4 without any spoke dependency.
+#
+# Usage:
+#   ./run_tests.sh aio_cfn
+#   pyats run job jobs/aio_cfn_job.py --testbed-file testbeds/aio.yaml
+
+testbed:
+  name: mycelium-aio
+
+devices:
+  hub:
+    type: linux
+    os: linux
+    connections:
+      local:
+        protocol: ssh
+        ip: 127.0.0.1
+    custom:
+      role: hub
+      transport: local
+      mycelium_backend_url: "%ENV{MYCELIUM_BACKEND_URL, http://localhost:8000}"
+      openclaw_seed_agent: "%ENV{OPENCLAW_SEED_AGENT, agent-alpha}"

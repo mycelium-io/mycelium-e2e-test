@@ -33,6 +33,7 @@ Suites:
 Options:
   --easypy          Run via easypy inside Docker (full reports, parallel tasks)
   --datafile FILE   Override the datafile (relative to project root)
+  --testbed FILE    Override the testbed file (relative to project root)
   --build           Force rebuild of the pyats-runner image before running
   -h, --help        Show this help message
 
@@ -80,17 +81,28 @@ resolve_default_datafile() {
     esac
 }
 
+resolve_default_testbed() {
+    local suite="$1"
+    case "$suite" in
+        aio_cfn)     echo "testbeds/aio.yaml" ;;
+        hub_and_spoke|core|hermes*|scenarios) echo "testbeds/lab.yaml" ;;
+        *)           echo "" ;;
+    esac
+}
+
 [[ $# -eq 0 ]] && usage
 
 SUITE=""
 EASYPY=false
 DATAFILE=""
+TESTBED=""
 BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --easypy)          EASYPY=true; shift ;;
         --datafile)        DATAFILE="$2"; shift 2 ;;
+        --testbed)         TESTBED="$2"; shift 2 ;;
         --build)           BUILD=true; shift ;;
         -h|--help)         usage ;;
         -*)                echo "Unknown option: $1" >&2; exit 1 ;;
@@ -113,6 +125,7 @@ fi
 SUITE_FILE="$(resolve_suite_file "$SUITE")"
 JOB_FILE="$(resolve_job_file "$SUITE")"
 DATAFILE="${DATAFILE:-$(resolve_default_datafile "$SUITE")}"
+TESTBED="${TESTBED:-$(resolve_default_testbed "$SUITE")}"
 
 cd "$SCRIPT_DIR"
 
@@ -136,6 +149,12 @@ if $EASYPY; then
     docker compose -f "$COMPOSE_FILE" run --rm pyats-runner \
         pyats run job "$JOB_FILE" --datafile "$DATAFILE"
 else
-    echo "Running via aetest.main(): $SUITE_FILE (datafile: $DATAFILE)"
-    uv run python "$SUITE_FILE" --datafile "$DATAFILE"
+    TESTBED_ARGS=()
+    if [[ -n "$TESTBED" && -f "$TESTBED" ]]; then
+        TESTBED_ARGS=(--testbed-file "$TESTBED")
+        echo "Running via aetest.main(): $SUITE_FILE (datafile: $DATAFILE, testbed: $TESTBED)"
+    else
+        echo "Running via aetest.main(): $SUITE_FILE (datafile: $DATAFILE)"
+    fi
+    uv run python "$SUITE_FILE" --datafile "$DATAFILE" "${TESTBED_ARGS[@]}"
 fi
