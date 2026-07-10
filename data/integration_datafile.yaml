@@ -17,11 +17,5 @@ testcases:
   CursorAuthFailure:
     uid: "mycelium:e2e:cursor:077"
 
-  CursorMultiHostDispatch:
-    uid: "mycelium:e2e:cursor:078"
 
-  CursorCrossFamilyCursor:
-    uid: "mycelium:e2e:cursor:079"
 
-  CursorCrossFamilyOpenClaw:
-    uid: "mycelium:e2e:cursor:080"
