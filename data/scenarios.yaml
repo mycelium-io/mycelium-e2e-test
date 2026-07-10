@@ -85,6 +85,118 @@ scenarios:
       - query: what was decided about the API design
         expected_substring: api-style
 
+  # ────────────────────────────────────────────────────────────────────
+  #  All-in-one (AIO) hub-only cross-adapter scenarios
+  #  All agents run on the hub — no spokes required. Designed for
+  #  single-device validation of mycelium ↔ CFN negotiation across
+  #  adapter families. Profile: shakedown (session reaches terminal
+  #  state; consensus best-effort given cold-start budgets).
+  # ────────────────────────────────────────────────────────────────────
+
+  - name: two-agent-aio-oc-he
+    base_name: TwoAgentShakedown
+    tier: pr
+    profile: shakedown
+    category: aio
+    description: >
+      AIO — openclaw hub vs hermes hub. Validates that the hermes poll
+      wake and openclaw Matrix wake both receive coordination ticks from
+      the same CFN session and reach a terminal state on a single device.
+    topic: deployment-strategy
+    timeout_seconds: 300
+    agents:
+      - role: alpha
+        adapter: openclaw
+        host: hub
+        position: >
+          Blue-green deployments only — zero-downtime is non-negotiable
+          for our SLA. Rolling updates introduce too much version skew.
+      - role: alpha-he
+        adapter: hermes
+        host: hub
+        position: >
+          Rolling updates with feature flags are cheaper to operate and
+          sufficient for our 99.5% SLA. Blue-green doubles infra cost.
+    require_consensus: false
+
+  - name: two-agent-aio-cu-he
+    base_name: TwoAgentShakedown
+    tier: pr
+    profile: shakedown
+    category: aio
+    description: >
+      AIO — cursor hub vs hermes hub. Cursor cold-spawn + hermes poll
+      wake on a single device. Exercises the full Go CFN negotiation
+      path without any spoke dependency.
+    topic: incident-response
+    timeout_seconds: 480
+    agents:
+      - role: alpha-cu
+        adapter: cursor
+        host: hub
+        position: >
+          On-call rotation with 15-minute SLA; automated runbooks handle
+          80% of pages. Humans escalate only on novel failure modes.
+      - role: beta-he
+        adapter: hermes
+        host: hub
+        position: >
+          Dedicated incident response team, 24/7. Automated runbooks
+          are risky without human oversight for every page.
+    require_consensus: false
+
+  - name: two-agent-aio-cu-oc
+    base_name: TwoAgentShakedown
+    tier: pr
+    profile: shakedown
+    category: aio
+    description: >
+      AIO — cursor hub vs openclaw hub. Both agents local; cursor
+      cold-spawn wake vs openclaw Matrix wake. Verifies cross-family
+      tick delivery from Go CFN on a single device.
+    topic: test-strategy
+    timeout_seconds: 480
+    agents:
+      - role: alpha-cu
+        adapter: cursor
+        host: hub
+        position: >
+          Shift-left: unit + integration tests in CI, contract tests
+          at the boundary. E2E only for critical user journeys.
+      - role: beta
+        adapter: openclaw
+        host: hub
+        position: >
+          E2E tests are the source of truth. Unit tests are too brittle
+          and mask integration failures until production.
+    require_consensus: false
+
+  - name: two-agent-aio-he-he
+    base_name: TwoAgentShakedown
+    tier: pr
+    profile: shakedown
+    category: aio
+    description: >
+      AIO — hermes hub vs hermes hub. Two hermes agents (alpha-he,
+      beta-he) on the same device. Validates multi-agent hermes
+      negotiation via CFN without any openclaw or cursor dependency.
+    topic: observability-stack
+    timeout_seconds: 300
+    agents:
+      - role: alpha-he
+        adapter: hermes
+        host: hub
+        position: >
+          OpenTelemetry all the way — vendor-neutral traces, logs,
+          metrics under one SDK. Avoid proprietary lock-in.
+      - role: beta-he
+        adapter: hermes
+        host: hub
+        position: >
+          Datadog is already deployed and the team knows it. Migrating
+          to OTel introduces operational risk for marginal gain.
+    require_consensus: false
+
   # A second PR row to ensure cross-family openclaw/cursor coordination
   # at least starts a session end-to-end. We don't require consensus —
   # if cursor cold-start eats the budget on a busy runner we still

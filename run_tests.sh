@@ -21,11 +21,12 @@ usage() {
 Usage: $(basename "$0") <suite> [options]
 
 Suites:
-  integration     Claude Code / Cursor adapter tests
+  integration     Cursor single-host adapter tests (75-77)
   sanity          Quick smoke test (rooms, memory, search, doctor)
+  aio_cfn         All-in-one CFN negotiation: oc/he/cu cross-adapter on hub only
   core            Full core tests (rooms, memory, CLI, CFN, Matrix)
   convergence     Multi-agent simulated negotiation scenarios
-  hub_and_spoke     Cross-device hub_and_spoke tests
+  hub_and_spoke   Cross-device hub-and-spoke tests
   weekly_full     All test tiers (weekly long-running run)
   minimal         Minimal pyATS verification test
 
@@ -47,8 +48,9 @@ EOF
 resolve_suite_file() {
     local suite="$1"
     case "$suite" in
-        minimal) echo "suites/minimal_test.py" ;;
-        *)       echo "suites/${suite}_suite.py" ;;
+        minimal)  echo "suites/minimal_test.py" ;;
+        aio_cfn)  echo "suites/aio_cfn_suite.py" ;;
+        *)        echo "suites/${suite}_suite.py" ;;
     esac
 }
 
@@ -57,6 +59,7 @@ resolve_job_file() {
     case "$suite" in
         weekly_full) echo "jobs/weekly_e2e_job.py" ;;
         minimal)     echo "jobs/minimal_job.py" ;;
+        aio_cfn)     echo "jobs/aio_cfn_job.py" ;;
         *)           echo "jobs/${suite}_job.py" ;;
     esac
 }
@@ -66,6 +69,7 @@ resolve_default_datafile() {
     case "$suite" in
         integration) echo "data/integration_datafile.yaml" ;;
         sanity)      echo "data/sanity_datafile.yaml" ;;
+        aio_cfn)     echo "data/aio_cfn_datafile.yaml" ;;
         minimal)     echo "data/minimal_datafile.yaml" ;;
         core)        echo "data/core_datafile.yaml" ;;
         convergence) echo "data/convergence_datafile.yaml" ;;
