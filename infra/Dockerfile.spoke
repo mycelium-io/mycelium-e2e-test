@@ -145,9 +145,28 @@ USER root
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/openclaw/entrypoint.sh"]
 
-# Release alias: identical to ``spoke`` but skips the baked CLI wheel.
+# Release alias: pre-bakes the mycelium CLI from PyPI (no local wheel needed).
 # build-openclaw.yml publishes this target to GHCR.
 FROM spoke-base AS spoke-release
+# Pass the mycelium CLI version to bake in, e.g.:
+#   docker build --build-arg MYCELIUM_VERSION=$(gh api repos/mycelium-io/mycelium/releases/latest --jq .tag_name) ...
+ARG MYCELIUM_VERSION
+ENV UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
+    UV_TOOL_DIR=/usr/local/share/uv/tools
+RUN [ -n "$MYCELIUM_VERSION" ] \
+    && curl -fsSL https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
+    && UV_INSTALL_DIR=/usr/local sh /tmp/uv-install.sh \
+    && rm /tmp/uv-install.sh \
+    && MC_VER="${MYCELIUM_VERSION#v}" \
+    && curl -fsSL \
+        "https://github.com/mycelium-io/mycelium/releases/download/v${MC_VER}/mycelium_cli-${MC_VER}-py3-none-any.whl" \
+        -o "/tmp/mycelium_cli-${MC_VER}-py3-none-any.whl" \
+    && /usr/local/uv tool install "/tmp/mycelium_cli-${MC_VER}-py3-none-any.whl" --python 3.12 --force \
+    && rm "/tmp/mycelium_cli-${MC_VER}-py3-none-any.whl" \
+    && chmod -R a+rX /usr/local/share/uv \
+    && ln -sf /usr/local/share/uv/tools/mycelium-cli/bin/mycelium /usr/local/bin/mycelium \
+    && mycelium --version \
+    && bash /openclaw/patch-mycelium-daemon.sh
 WORKDIR /openclaw
 USER spoke
 

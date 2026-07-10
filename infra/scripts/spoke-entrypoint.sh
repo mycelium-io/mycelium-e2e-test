@@ -94,8 +94,23 @@ echo "[spoke-entrypoint] Collector hub:    $COLLECTOR_HUB"
 # ── Mycelium CLI available? ─────────────────────────────────────────
 
 if ! command -v mycelium &>/dev/null; then
-    echo "[spoke-entrypoint] mycelium CLI not found — installing from release..."
-    curl -fsSL https://mycelium-io.github.io/mycelium/install.sh | bash
+    echo "[spoke-entrypoint] mycelium CLI not found — installing via uv+wheel..."
+    if ! command -v uv &>/dev/null; then
+        curl -fsSL https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
+            && UV_INSTALL_DIR=/usr/local sh /tmp/uv-install.sh \
+            && rm -f /tmp/uv-install.sh
+    fi
+    export PATH="/usr/local/bin:${PATH}"
+    _mc_latest=$(curl -fsSL "https://api.github.com/repos/mycelium-io/mycelium/releases/latest" | jq -r '.tag_name')
+    _mc_ver="${_mc_latest#v}"
+    curl -fsSL \
+        "https://github.com/mycelium-io/mycelium/releases/download/${_mc_latest}/mycelium_cli-${_mc_ver}-py3-none-any.whl" \
+        -o "/tmp/mycelium_cli-${_mc_ver}-py3-none-any.whl"
+    UV_TOOL_DIR=/usr/local/share/uv/tools \
+        UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
+        uv tool install "/tmp/mycelium_cli-${_mc_ver}-py3-none-any.whl" --python 3.12 --force 2>&1 | sed 's/^/  /'
+    rm -f "/tmp/mycelium_cli-${_mc_ver}-py3-none-any.whl"
+    ln -sf /usr/local/share/uv/tools/mycelium-cli/bin/mycelium /usr/local/bin/mycelium 2>/dev/null || true
 fi
 echo "[spoke-entrypoint] mycelium CLI:     $(mycelium --version 2>/dev/null || echo 'installed')"
 /openclaw/patch-mycelium-daemon.sh 2>&1 \
@@ -331,13 +346,22 @@ fi
 # ── Cursor bootstrap (if enabled) ───────────────────────────────────
 
 if has_adapter cursor; then
+    CURSOR_MODEL="${CURSOR_MODEL:-claude-4.5-haiku}"
     echo "[spoke-entrypoint] Bootstrapping cursor..."
     if ! command -v cursor-agent &>/dev/null; then
         echo "[spoke-entrypoint] ERROR: cursor-agent binary missing from image" >&2
         exit 1
     fi
-    if [ ! -r "$HOME/.config/cursor/auth.json" ]; then
-        echo "[spoke-entrypoint] WARNING: cursor auth.json not readable; cursor tests will fail"
+    if [ ! -r "$HOME/.config/cursor/auth.json" ] && [ -z "${CURSOR_API_KEY:-}" ]; then
+        echo "[spoke-entrypoint] WARNING: no cursor auth.json and CURSOR_API_KEY unset; cursor tests will fail"
+    fi
+    if [ -n "${CURSOR_API_KEY:-}" ]; then
+        echo "[spoke-entrypoint] Cursor auth: CURSOR_API_KEY (headless)"
+    elif [ -r "$HOME/.config/cursor/auth.json" ]; then
+        echo "[spoke-entrypoint] Cursor auth: ~/.config/cursor/auth.json"
+    fi
+    if [ -n "${CURSOR_MODEL:-}" ]; then
+        echo "[spoke-entrypoint] Cursor model: $CURSOR_MODEL"
     fi
     mycelium adapter add cursor --yes 2>&1 \
         || echo "[spoke-entrypoint] adapter add cursor skipped"
@@ -382,51 +406,32 @@ YAML
     /openclaw/patch-hermes-plugin.sh 2>&1 \
         || echo "[spoke-entrypoint] hermes plugin patch skipped"
 
-    # Route Hermes inference through the same litellm proxy as OpenClaw.
-    # Hermes reads API keys from process env (not ~/.hermes/.env) and defaults
-    # openrouter to openrouter.ai — patch auth.json + default model at boot.
+    # Route Hermes inference through the same LiteLLM proxy as OpenClaw.
+    # Hermes custom-provider mode reads model.{api_key,base_url,default} from
+    # config.yaml — not auth.json / OPENROUTER credential pool.
     if [ -n "${LLM_API_KEY:-}" ]; then
         HERMES_MODEL="${LLM_MODEL:-anthropic/claude-sonnet-4-20250514}"
+        case "$HERMES_MODEL" in
+            openai/*) HERMES_MODEL="${HERMES_MODEL#openai/}" ;;
+        esac
         HERMES_LITELLM_BASE="${LLM_BASE_URL:-}"
         HERMES_LITELLM_BASE="${HERMES_LITELLM_BASE%/}"
         if [ -n "$HERMES_LITELLM_BASE" ] && [ "${HERMES_LITELLM_BASE##*/}" != "v1" ]; then
             HERMES_LITELLM_BASE="${HERMES_LITELLM_BASE}/v1"
         fi
-        if [ -n "$HERMES_LITELLM_BASE" ] && [ -f "$HERMES_DIR/auth.json" ]; then
-            node -e "
-              const fs = require('fs');
-              const authPath = '$HERMES_DIR/auth.json';
-              const baseUrl = '$HERMES_LITELLM_BASE';
-              const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-              for (const cred of (auth.credential_pool?.openrouter || [])) {
-                cred.base_url = baseUrl;
-                cred.last_status = null;
-                cred.last_error_code = null;
-                cred.last_error_message = null;
-              }
-              fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
-              console.log('[spoke-entrypoint] Hermes openrouter base_url → ' + baseUrl);
-            " 2>&1 || echo "[spoke-entrypoint] hermes auth.json patch skipped"
-        fi
-        HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
-            OPENROUTER_API_KEY="${LLM_API_KEY}" ANTHROPIC_API_KEY="${LLM_API_KEY}" \
-            hermes auth reset openrouter 2>/dev/null \
-            || echo "[spoke-entrypoint] hermes auth reset skipped"
-        HOME="$HOME" HERMES_HOME="$HERMES_DIR" \
-            hermes config set model "$HERMES_MODEL" 2>/dev/null \
-            || echo "[spoke-entrypoint] hermes model config skipped"
-        if [ -n "$HERMES_LITELLM_BASE" ] && [ -f "$HERMES_DIR/auth.json" ]; then
-            node -e "
-              const fs = require('fs');
-              const authPath = '$HERMES_DIR/auth.json';
-              const baseUrl = '$HERMES_LITELLM_BASE';
-              const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-              for (const cred of (auth.credential_pool?.openrouter || [])) {
-                cred.base_url = baseUrl;
-                cred.last_status = null;
-              }
-              fs.writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
-            " 2>/dev/null || true
+        _hermes_cfg() {
+            HOME="$HOME" HERMES_HOME="$HERMES_DIR" hermes config set "$@" 2>/dev/null \
+                || echo "[spoke-entrypoint] hermes config set $1 skipped"
+        }
+        _hermes_cfg model.provider custom
+        _hermes_cfg model.api_mode chat_completions
+        _hermes_cfg model.api_key "$LLM_API_KEY"
+        _hermes_cfg model.default "$HERMES_MODEL"
+        if [ -n "$HERMES_LITELLM_BASE" ]; then
+            _hermes_cfg model.base_url "$HERMES_LITELLM_BASE"
+            echo "[spoke-entrypoint] Hermes model → $HERMES_MODEL via $HERMES_LITELLM_BASE"
+        else
+            echo "[spoke-entrypoint] Hermes model → $HERMES_MODEL (no LLM_BASE_URL)"
         fi
     fi
 fi
@@ -443,11 +448,20 @@ SUPERVISOR_CONF="/tmp/spoke-supervisord.conf"
 SPOKE_PROG_ENV='directory=/home/spoke
 environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s"'
 
-# Hermes gateway reads API keys from process env, not ~/.hermes/.env.
+# Hermes gateway LLM creds live in config.yaml (model.api_key); keep env for aux tools.
 HERMES_PROG_ENV="$SPOKE_PROG_ENV"
 if has_adapter hermes && [ -n "${LLM_API_KEY:-}" ]; then
     HERMES_PROG_ENV='directory=/home/spoke
-environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s",OPENROUTER_API_KEY="'"${LLM_API_KEY}"'",ANTHROPIC_API_KEY="'"${LLM_API_KEY}"'",GATEWAY_ALLOW_ALL_USERS="true"'
+environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s",GATEWAY_ALLOW_ALL_USERS="true"'
+fi
+
+# Cursor cold-spawn reads CURSOR_API_KEY + CURSOR_MODEL from the daemon process env.
+DAEMON_PROG_ENV="$SPOKE_PROG_ENV"
+if has_adapter cursor; then
+    _daemon_extra=",CURSOR_MODEL=\"${CURSOR_MODEL:-claude-4.5-haiku}\""
+    [ -n "${CURSOR_API_KEY:-}" ] && _daemon_extra="${_daemon_extra},CURSOR_API_KEY=\"${CURSOR_API_KEY}\""
+    DAEMON_PROG_ENV='directory=/home/spoke
+environment=HOME="/home/spoke",HERMES_HOME="/home/spoke/.hermes",PATH="/usr/local/bin:/usr/local/share/uv/tools/mycelium-cli/bin:/home/spoke/.local/bin:%(ENV_PATH)s"'"${_daemon_extra}"
 fi
 
 cat > "$SUPERVISOR_CONF" <<CONF
@@ -468,7 +482,7 @@ stderr_logfile=/dev/fd/2
 stderr_logfile_maxbytes=0
 
 [program:mycelium-daemon]
-${SPOKE_PROG_ENV}
+${DAEMON_PROG_ENV}
 command=mycelium daemon run --foreground
 autostart=true
 autorestart=true

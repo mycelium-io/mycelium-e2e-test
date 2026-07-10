@@ -25,7 +25,7 @@ Suites:
   sanity          Quick smoke test (rooms, memory, search, doctor)
   core            Full core tests (rooms, memory, CLI, CFN, Matrix)
   convergence     Multi-agent simulated negotiation scenarios
-  distributed     Cross-device distributed tests
+  hub_and_spoke     Cross-device hub_and_spoke tests
   weekly_full     All test tiers (weekly long-running run)
   minimal         Minimal pyATS verification test
 
@@ -70,7 +70,7 @@ resolve_default_datafile() {
         core)        echo "data/core_datafile.yaml" ;;
         convergence) echo "data/convergence_datafile.yaml" ;;
         cursor)      echo "data/cursor_datafile.yaml" ;;
-        distributed) echo "data/distributed_datafile.yaml" ;;
+        hub_and_spoke) echo "data/distributed_datafile.yaml" ;;
         weekly_full) echo "data/weekly_datafile.yaml" ;;
         *)           echo "data/base_datafile.yaml" ;;
     esac

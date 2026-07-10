@@ -667,6 +667,7 @@ class OpenClawProvisioner(ABCProvisioner):
         device: Any,
         *,
         handles: list[str] | None = None,
+        idle_wait_seconds: int | None = None,
     ) -> None:
         """Reset OpenClaw agents on a host between suite scenarios.
 
@@ -678,7 +679,12 @@ class OpenClawProvisioner(ABCProvisioner):
         When ``handles`` is provided, only those agents are reset. Suite
         hygiene should pass the scenario's agents so unrelated hub agents
         (e.g. ``agent-gamma`` in a two-agent row) are not disturbed.
+
+        Waits up to ``idle_wait_seconds`` for in-flight LLM turns to finish
+        before calling ``sessions.reset`` so the gateway is not busy.
         """
+        from libs.openclaw import wait_for_device_agents_idle
+
         device_label = host_exec.describe(device)
         available = set(self._list_openclaw_agents(device))
         if handles is None:
@@ -695,6 +701,30 @@ class OpenClawProvisioner(ABCProvisioner):
         if not targets:
             log.debug("openclaw.reset_device_gateway_sessions: no agents on %s", device_label)
             return
+
+        idle_wait = 20 if idle_wait_seconds is None else max(0, idle_wait_seconds)
+        if idle_wait > 0:
+            log.info(
+                "openclaw.reset_device_gateway_sessions: waiting up to %ds for idle on %s (%s)",
+                idle_wait,
+                device_label,
+                ", ".join(targets),
+            )
+            busy = wait_for_device_agents_idle(device, targets, timeout=idle_wait)
+            still_busy = {h: n for h, n in busy.items() if n > 0}
+            if still_busy:
+                log.warning(
+                    "openclaw.reset_device_gateway_sessions: agents still active on %s after %ds: %s",
+                    device_label,
+                    idle_wait,
+                    still_busy,
+                )
+            else:
+                log.info(
+                    "openclaw.reset_device_gateway_sessions: all agents idle on %s",
+                    device_label,
+                )
+
         log.info(
             "openclaw.reset_device_gateway_sessions: resetting %d agent(s) on %s: %s",
             len(targets),

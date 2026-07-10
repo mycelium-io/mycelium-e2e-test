@@ -3,7 +3,8 @@
 #
 # Keeps product mycelium-cli unchanged while improving E2E agent compliance:
 #   - tick instructions must demand a shell command (prose-only is invalid)
-#   - requireMention=false so CognitiveEngine ticks are always addressed
+#   - requireMention=true enforced (CE ticks go through routeTick, not broadcast)
+#   - agent-sourced broadcasts suppressed from peer dispatch in requireMention=false mode
 
 set -euo pipefail
 
@@ -66,17 +67,57 @@ import json
 import sys
 from pathlib import Path
 
+# requireMention=true is correct: coordination ticks go through routeTick
+# (not routeBroadcast) so they are unaffected by this flag. Keeping it true
+# prevents agents broadcasting to each other on every room message.
 path = Path(sys.argv[1])
 cfg = json.loads(path.read_text())
 channel = cfg.setdefault("channels", {}).setdefault("mycelium-room", {})
-if channel.get("requireMention") is False:
-    print(f"[patch-openclaw-plugin] {path} already has requireMention=false")
+current = channel.get("requireMention")
+if current is True or current is None:
+    print(f"[patch-openclaw-plugin] {path} requireMention already correct (true/default)")
 else:
-    channel["requireMention"] = False
+    channel["requireMention"] = True
     path.write_text(json.dumps(cfg, indent=2) + "\n")
-    print(f"[patch-openclaw-plugin] set requireMention=false in {path}")
+    print(f"[patch-openclaw-plugin] reset requireMention=true in {path}")
+PY
+}
+
+patch_peer_relay() {
+    if [ ! -f "$ROUTE" ]; then
+        return 0
+    fi
+    if grep -q 'agent wire reply' "$ROUTE"; then
+        echo "[patch-openclaw-plugin] route.js peer-relay patch already applied"
+        return 0
+    fi
+
+    python3 - "$ROUTE" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+# Insert agent-sender guard at the top of routeBroadcast, before the
+# isCoordinationWireReply check.  Agents never talk to each other directly;
+# relaying their replies to peers creates a runaway chain (depth spirals,
+# all agents stuck in conflict loops).
+needle = "    if (isCoordinationWireReply(content)) {"
+insert = (
+    "    if (cfg.agents.includes(sender)) {\n"
+    '        return [{ kind: "ignore", reason: "agent wire reply \u2014 peer dispatch suppressed" }];\n'
+    "    }\n"
+    "    if (isCoordinationWireReply(content)) {"
+)
+if needle not in text:
+    raise SystemExit(f"[patch-openclaw-plugin] isCoordinationWireReply anchor not found in {path}")
+text = text.replace(needle, insert, 1)
+path.write_text(text)
+print(f"[patch-openclaw-plugin] applied peer-relay suppression patch to {path}")
 PY
 }
 
 patch_route
+patch_peer_relay
 patch_config

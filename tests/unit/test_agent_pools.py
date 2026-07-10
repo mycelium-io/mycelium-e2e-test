@@ -93,7 +93,7 @@ def test_reset_openclaw_pools_resets_all_hub_slots(monkeypatch):
     reset_calls: list[list[str]] = []
 
     class _OpenClawProvisioner:
-        def reset_device_gateway_sessions(self, device, *, handles=None):
+        def reset_device_gateway_sessions(self, device, *, handles=None, idle_wait_seconds=None):
             reset_calls.append(list(handles or []))
 
     monkeypatch.setattr("libs.agent_pools.get_provisioner", lambda _: _OpenClawProvisioner())

@@ -104,11 +104,13 @@ env:
   LLM_MODEL: ${{ secrets.LLM_MODEL || vars.LLM_MODEL || '' }}
   LLM_API_KEY: ${{ secrets.LLM_API_KEY || vars.LLM_API_KEY || '' }}
   LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || vars.LLM_BASE_URL || '' }}
+  CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY || vars.CURSOR_API_KEY || '' }}
+  CURSOR_MODEL: ${{ secrets.CURSOR_MODEL || vars.CURSOR_MODEL || 'claude-4.5-haiku' }}
   # Spokes default to openclaw-only for legacy parity; PR / nightly /
   # full runs from the mycelium repo can override via workflow inputs or
   # client_payload fields.
   SPOKE_ADAPTERS: ${{ github.event.inputs.spoke_adapters || github.event.client_payload.spoke_adapters || 'openclaw' }}
-  HUB_ADAPTERS: ${{ github.event.inputs.hub_adapters || github.event.client_payload.hub_adapters || 'openclaw' }}
+  HUB_ADAPTERS: ${{ github.event.inputs.hub_adapters || github.event.client_payload.hub_adapters || 'openclaw,cursor' }}
   # Optional cursor auth bind-mount for compose hub/spoke cursor tests.
   HOST_CURSOR_AUTH: ${{ secrets.HOST_CURSOR_AUTH || '' }}
 
@@ -257,7 +259,7 @@ jobs:
         run: |
           case "${{ steps.resolve.outputs.suite }}" in
             pr|nightly|weekly_full)
-              echo "HUB_ADAPTERS=openclaw,hermes" >> "$GITHUB_ENV"
+              echo "HUB_ADAPTERS=openclaw,cursor,hermes" >> "$GITHUB_ENV"
               echo "SPOKE_ADAPTERS=openclaw,cursor,hermes" >> "$GITHUB_ENV"
               echo "PR/nightly/full suite → hub=$HUB_ADAPTERS spokes=$SPOKE_ADAPTERS"
               ;;

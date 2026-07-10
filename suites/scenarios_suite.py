@@ -33,7 +33,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from jobs._common import RUNTIME_COMPOSE, TESTBED_NAME_COMPOSE  # noqa: E402
+from jobs._common import RUNTIME_COMPOSE, TESTBED_NAME_COMPOSE, get_agent_idle_wait  # noqa: E402
 from libs import host_exec  # noqa: E402 - sys.path tweak first
 from libs.agent_pools import (  # noqa: E402 - sys.path tweak first
     ensure_pool_slots,
@@ -386,6 +386,10 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
             testscript.parameters["provisioned_agents"] = {}
             return
 
+        idle_wait = get_agent_idle_wait()
+        testscript.parameters["agent_idle_wait"] = idle_wait
+        log.info("agent_idle_wait: %ds (gates openclaw reset between scenarios)", idle_wait)
+
         # Build a deduped set of (adapter, role, host) tuples
         # across every active row. Keys use the *role* from
         # scenarios.yaml; values may reference a different actual handle
@@ -447,7 +451,12 @@ class LabRedeployCommonSetup(aetest.CommonSetup):
                 f"provision_matrix_agents: {len(failures)} agent(s) could not be ensured:\n  {joined}",
             )
 
-        reset_openclaw_pools_for_wants(testbed, wants, pools)
+        reset_openclaw_pools_for_wants(
+            testbed,
+            wants,
+            pools,
+            idle_wait_seconds=idle_wait,
+        )
 
         try:
             setup_shared_suite_room(testscript, testbed, wants)

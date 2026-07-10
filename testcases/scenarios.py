@@ -11,7 +11,7 @@ Three axes
 - **tier**: ``pr`` | ``nightly`` | ``weekly`` — controls run frequency.
   Filtered via the ``MYCELIUM_E2E_TIERS`` env var (comma-separated;
   ``all`` matches everything; unset defaults to ``all``).
-- **category**: ``core`` | ``distributed`` | ``cross_adapter`` etc. —
+- **category**: ``core`` | ``hub_and_spoke`` | ``cross_adapter`` etc. —
   becomes a pyATS ``groups`` entry so existing job filters keep working.
 - **agents**: the per-row adapter combo (e.g. ``[oc on hub, cu on
   spoke1]``). The class suffix encodes this for legibility:
@@ -45,6 +45,7 @@ from typing import Any, ClassVar
 
 from pyats import aetest
 
+from jobs._common import get_agent_idle_wait
 from libs import sessions
 from libs.agent_pools import reset_openclaw_pools_for_wants
 from libs.host_exec import HostExecError
@@ -432,8 +433,15 @@ class _ScenarioCore(aetest.Testcase):
         if testscript is not None:
             provisioned = testscript.parameters.get("provisioned_agents", {}) or {}
             self._agent_pools = testscript.parameters.get("agent_pools") or {}
+            self._agent_idle_wait = int(
+                testscript.parameters.get(
+                    "agent_idle_wait",
+                    get_agent_idle_wait(),
+                )
+            )
         else:
             self._agent_pools = {}
+            self._agent_idle_wait = get_agent_idle_wait()
 
         if testbed is None:
             self.skipped("no pyATS testbed supplied (scenarios need a testbed)")
@@ -764,7 +772,12 @@ class _ScenarioCore(aetest.Testcase):
             def __init__(self, devices: dict[str, Any]) -> None:
                 self.devices = devices
 
-        reset_openclaw_pools_for_wants(_MiniTestbed(testbed_devices), wants, pools)
+        reset_openclaw_pools_for_wants(
+            _MiniTestbed(testbed_devices),
+            wants,
+            pools,
+            idle_wait_seconds=self._agent_idle_wait,
+        )
 
     def _reset_openclaw_device(
         self,
@@ -775,7 +788,11 @@ class _ScenarioCore(aetest.Testcase):
         reset_all = getattr(provisioner, "reset_device_gateway_sessions", None)
         if callable(reset_all):
             try:
-                reset_all(device, handles=handles)
+                reset_all(
+                    device,
+                    handles=handles,
+                    idle_wait_seconds=getattr(self, "_agent_idle_wait", None),
+                )
             except Exception as exc:  # noqa: BLE001 - best-effort hygiene
                 log.warning(
                     "openclaw device reset failed on %s (continuing): %s",

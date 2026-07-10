@@ -8,6 +8,7 @@ every slot that must exist on a host before scenarios run.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from libs.host_exec import HostExecError
@@ -183,11 +184,25 @@ def ensure_pool_slots(
             if slot in discovered:
                 log.debug("  pool slot %s already present on %s/%s", slot, adapter, host)
                 continue
-            try:
-                provisioner.ensure_runtime(device, slot)
-                log.info("  ✓ ensured pool slot %s (%s@%s)", slot, adapter, host)
-            except (PrereqMissing, HostExecError) as exc:
-                failures.append(f"{slot}@{host} ({adapter}): ensure_runtime — {exc}")
+            last_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    provisioner.ensure_runtime(device, slot)
+                    log.info("  ✓ ensured pool slot %s (%s@%s)", slot, adapter, host)
+                    last_exc = None
+                    break
+                except (PrereqMissing, HostExecError) as exc:
+                    last_exc = exc
+                    if attempt == 0 and "connect" in str(exc).lower():
+                        log.warning(
+                            "  ⚠ pool slot %s/%s/%s connect error, retrying in 5s…",
+                            adapter,
+                            host,
+                            slot,
+                        )
+                        time.sleep(5)
+            if last_exc is not None:
+                failures.append(f"{slot}@{host} ({adapter}): ensure_runtime — {last_exc}")
     return failures
 
 
@@ -271,6 +286,8 @@ def reset_openclaw_pools_for_wants(
     testbed: Any,
     wants: set[tuple[str, str, str]],
     pools: dict[str, dict[str, dict[str, Any]]],
+    *,
+    idle_wait_seconds: int | None = None,
 ) -> None:
     """Reset every openclaw pool slot on hosts used by ``wants``.
 
@@ -290,7 +307,7 @@ def reset_openclaw_pools_for_wants(
             provisioner = get_provisioner("openclaw")
             reset = getattr(provisioner, "reset_device_gateway_sessions", None)
             if callable(reset):
-                reset(device, handles=slots)
+                reset(device, handles=slots, idle_wait_seconds=idle_wait_seconds)
             else:
                 log.warning("reset_openclaw_pools_for_wants: no reset on %s", host)
         except Exception as exc:  # noqa: BLE001 - hygiene is best-effort

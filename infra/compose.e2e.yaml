@@ -281,7 +281,7 @@ services:
         condition: service_healthy
     environment:
       OPENCLAW_ROLE: hub
-      SPOKE_ADAPTERS: "${HUB_ADAPTERS:-openclaw}"
+      SPOKE_ADAPTERS: "${HUB_ADAPTERS:-openclaw,cursor}"
       MATRIX_HOMESERVER: http://matrix-synapse:8008
       MYCELIUM_BACKEND_URL: http://mycelium-backend:8000
       COLLECTOR_HUB_URL: http://mycelium-collector:4318
@@ -290,6 +290,8 @@ services:
       LLM_MODEL: "${LLM_MODEL:-}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      CURSOR_API_KEY: "${CURSOR_API_KEY:-}"
+      CURSOR_MODEL: "${CURSOR_MODEL:-claude-4.5-haiku}"
     volumes:
       - e2e-shared:/shared:ro
       - ${HOST_CURSOR_AUTH:-/dev/null}:/run/host-secrets/cursor-auth.json:ro
@@ -343,6 +345,8 @@ services:
       LLM_MODEL: "${LLM_MODEL:-}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      CURSOR_API_KEY: "${CURSOR_API_KEY:-}"
+      CURSOR_MODEL: "${CURSOR_MODEL:-claude-4.5-haiku}"
     volumes:
       - e2e-shared:/shared:ro
       # Host cursor auth (optional; left as an explicit empty default
@@ -381,6 +385,8 @@ services:
       LLM_MODEL: "${LLM_MODEL:-}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      CURSOR_API_KEY: "${CURSOR_API_KEY:-}"
+      CURSOR_MODEL: "${CURSOR_MODEL:-claude-4.5-haiku}"
     volumes:
       - e2e-shared:/shared:ro
       - ${HOST_CURSOR_AUTH:-/dev/null}:/run/host-secrets/cursor-auth.json:ro

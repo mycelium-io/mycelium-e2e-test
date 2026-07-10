@@ -3,7 +3,7 @@ Integration adapter suite — Cursor single-host tests (75-77).
 
 Tests 75-77 run on any all-in-one host with the mycelium stack running.
 Tests 78-80 require spoke agents on separate devices and live in the
-distributed suite instead.
+hub_and_spoke suite instead.
 
 Run standalone:
     python suites/integration_suite.py --datafile data/integration_datafile.yaml

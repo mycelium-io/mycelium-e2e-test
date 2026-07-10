@@ -2,7 +2,7 @@
 Weekly full E2E suite — runs ALL test tiers in sequence.
 
 This is the primary suite for the weekly long-running integration test.
-Includes: core, CFN, Matrix, convergence, local-real, distributed, openclaw,
+Includes: core, CFN, Matrix, convergence, local-real, hub_and_spoke, openclaw,
 and cross-channel tests.
 
 Run standalone:

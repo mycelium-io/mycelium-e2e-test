@@ -489,6 +489,41 @@ def test_cleanup_agent_resets_listed_sessions():
     assert "60000" in reset_argv
 
 
+def test_reset_device_gateway_sessions_waits_for_idle_before_reset():
+    prov = OpenClawProvisioner()
+    session_lists: list[str] = []
+    idle_waits: list[tuple[list[str], float]] = []
+
+    def fake_execute(_device, argv, **_kwargs):
+        if isinstance(argv, list) and argv[:3] == ["openclaw", "agents", "list"]:
+            return _ok("- agent-alpha\n- agent-beta")
+        if isinstance(argv, list) and argv[:2] == ["openclaw", "sessions"]:
+            session_lists.append(argv[3] if len(argv) > 3 else "?")
+            return _ok("[]")
+        if isinstance(argv, list) and argv[:2] == ["openclaw", "gateway"]:
+            return _ok()
+        if isinstance(argv, str) and ".openclaw/agents/" in argv:
+            return _ok()
+        if argv == ["/openclaw/restart-openclaw-gateway.sh"]:
+            return _ok()
+        if argv == ["sleep", "3"]:
+            return _ok()
+        return _ok()
+
+    def fake_wait(device, handles, *, timeout=20, poll_interval=2.0):
+        idle_waits.append((list(handles), timeout))
+        return {h: 0 for h in handles}
+
+    with (
+        patch("libs.host_exec.execute", side_effect=fake_execute),
+        patch("libs.openclaw.wait_for_device_agents_idle", side_effect=fake_wait),
+    ):
+        prov.reset_device_gateway_sessions(_device(), handles=["agent-alpha"], idle_wait_seconds=25)
+
+    assert idle_waits == [(["agent-alpha"], 25)]
+    assert session_lists == ["agent-alpha"]
+
+
 def test_reset_device_gateway_sessions_resets_every_agent_and_restarts():
     prov = OpenClawProvisioner()
     session_lists: list[str] = []
@@ -509,7 +544,10 @@ def test_reset_device_gateway_sessions_resets_every_agent_and_restarts():
             return _ok()
         return _ok()
 
-    with patch("libs.host_exec.execute", side_effect=fake_execute) as mock_exec:
+    with (
+        patch("libs.host_exec.execute", side_effect=fake_execute) as mock_exec,
+        patch("libs.openclaw.wait_for_device_agents_idle", return_value={}),
+    ):
         prov.reset_device_gateway_sessions(_device())
 
     argv_lists = [c[0][1] for c in mock_exec.call_args_list if isinstance(c[0][1], list)]
@@ -538,7 +576,10 @@ def test_reset_device_gateway_sessions_scoped_to_handles():
             return _ok()
         return _ok()
 
-    with patch("libs.host_exec.execute", side_effect=fake_execute):
+    with (
+        patch("libs.host_exec.execute", side_effect=fake_execute),
+        patch("libs.openclaw.wait_for_device_agents_idle", return_value={}),
+    ):
         prov.reset_device_gateway_sessions(_device(), handles=["agent-alpha", "agent-beta"])
 
     assert sorted(session_lists) == ["agent-alpha", "agent-beta"]

@@ -314,7 +314,7 @@ scenarios:
   - name: three-agent-consensus-oc-cu-he
     base_name: ThreeAgentConsensus
     tier: nightly
-    category: distributed
+    category: hub_and_spoke
     description: >
       The full cross-family triple. Slow on cursor cold-spawn but the
       most diagnostic single row in the matrix — a regression here

@@ -2,7 +2,7 @@
 Sanity suite — quick smoke test covering core functionality only.
 
 Runs: environment probe, room lifecycle, memory CRUD, search, doctor.
-Does NOT run: LLM-dependent, convergence, distributed, or slow tests.
+Does NOT run: LLM-dependent, convergence, hub_and_spoke, or slow tests.
 
 Run standalone:
     python suites/sanity_suite.py --datafile data/sanity_datafile.yaml
