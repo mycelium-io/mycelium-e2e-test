@@ -171,30 +171,37 @@ scenarios:
           and mask integration failures until production.
     require_consensus: false
 
-  - name: two-agent-aio-he-he
-    base_name: TwoAgentShakedown
+  - name: three-agent-aio-oc-he-cu
+    base_name: ThreeAgentShakedown
     tier: pr
     profile: shakedown
     category: aio
     description: >
-      AIO — hermes hub vs hermes hub. Two hermes agents (alpha-he,
-      beta-he) on the same device. Validates multi-agent hermes
-      negotiation via CFN without any openclaw or cursor dependency.
-    topic: observability-stack
-    timeout_seconds: 300
+      AIO — openclaw + hermes + cursor, all on hub. Full cross-family
+      triple on a single device: validates that all three wake protocols
+      (Matrix DM, poll, cold-spawn) receive CFN ticks from the same
+      session and reach a terminal state.
+    topic: data-retention
+    timeout_seconds: 600
     agents:
+      - role: alpha
+        adapter: openclaw
+        host: hub
+        position: >
+          90-day retention for all event logs; 7-year archive for
+          compliance records. Cost-optimised with tiered storage.
       - role: alpha-he
         adapter: hermes
         host: hub
         position: >
-          OpenTelemetry all the way — vendor-neutral traces, logs,
-          metrics under one SDK. Avoid proprietary lock-in.
-      - role: beta-he
-        adapter: hermes
+          30-day hot retention is sufficient for ops. Anything older
+          moves to cold archive with a 24-hour retrieval SLA.
+      - role: alpha-cu
+        adapter: cursor
         host: hub
         position: >
-          Datadog is already deployed and the team knows it. Migrating
-          to OTel introduces operational risk for marginal gain.
+          Retention driven by data classification: PII purged after
+          30 days, non-PII retained 1 year, compliance records 7 years.
     require_consensus: false
 
   # A second PR row to ensure cross-family openclaw/cursor coordination
