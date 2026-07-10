@@ -37,17 +37,21 @@ RUNTIME_ENV_VAR = "MYCELIUM_E2E_RUNTIME"
 
 RUNTIME_COMPOSE = "compose"
 RUNTIME_LAB = "lab"
+RUNTIME_AIO = "aio"
 
-RUNTIMES_ALL = frozenset({RUNTIME_COMPOSE, RUNTIME_LAB})
+RUNTIMES_ALL = frozenset({RUNTIME_COMPOSE, RUNTIME_LAB, RUNTIME_AIO})
 RUNTIME_LAB_ONLY = frozenset({RUNTIME_LAB})
+RUNTIME_AIO_ONLY = frozenset({RUNTIME_AIO})
 
 TESTBED_COMPOSE = "testbeds/compose.yaml"
 TESTBED_LAB = "testbeds/lab.yaml"
+TESTBED_AIO = "testbeds/aio.yaml"
 
 # ``testbed.name`` values from ``testbeds/*.yaml`` — used when pyATS has
 # already loaded a topology object (``runtime.testbed`` or ``run(testbed=)``).
 TESTBED_NAME_COMPOSE = "mycelium-compose"
 TESTBED_NAME_LAB = "mycelium-lab"
+TESTBED_NAME_AIO = "mycelium-aio"
 
 
 class JobRuntimeMismatchError(RuntimeError):
@@ -64,8 +68,10 @@ def testbed_path_for_runtime(runtime: str) -> str:
         return TESTBED_COMPOSE
     if runtime == RUNTIME_LAB:
         return TESTBED_LAB
+    if runtime == RUNTIME_AIO:
+        return TESTBED_AIO
     raise InvalidE2ERuntimeError(
-        f"unsupported runtime {runtime!r}; expected {RUNTIME_COMPOSE!r} or {RUNTIME_LAB!r}",
+        f"unsupported runtime {runtime!r}; expected one of: compose, lab, aio",
     )
 
 
@@ -95,17 +101,19 @@ def runtime_resolution_source(job_default: str) -> str:
 
 
 def runtime_for_testbed(testbed_path: str) -> str:
-    """Return ``compose`` or ``lab`` from a testbed file path."""
+    """Return ``compose``, ``lab``, or ``aio`` from a testbed file path."""
     normalized = testbed_path.replace("\\", "/").rstrip("/")
     if normalized.endswith("compose.yaml"):
         return RUNTIME_COMPOSE
     if normalized.endswith("lab.yaml"):
         return RUNTIME_LAB
+    if normalized.endswith("aio.yaml"):
+        return RUNTIME_AIO
     return "unknown"
 
 
 def runtime_for_testbed_object(testbed: Any) -> str:
-    """Return ``compose`` or ``lab`` from a loaded pyATS Testbed."""
+    """Return ``compose``, ``lab``, or ``aio`` from a loaded pyATS Testbed."""
     if testbed is None:
         return "unknown"
     name = getattr(testbed, "name", "") or ""
@@ -113,6 +121,8 @@ def runtime_for_testbed_object(testbed: Any) -> str:
         return RUNTIME_COMPOSE
     if name == TESTBED_NAME_LAB:
         return RUNTIME_LAB
+    if name == TESTBED_NAME_AIO:
+        return RUNTIME_AIO
     return "unknown"
 
 
