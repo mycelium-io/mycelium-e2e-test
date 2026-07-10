@@ -502,3 +502,82 @@ def wait_for_no_active_sessions(
         f"active coordination session(s) still present on {parent_room!r} "
         f"after {timeout_seconds:.0f}s — prior testcase may have aborted mid-flight"
     )
+
+
+def wait_for_cfn_idle(
+    cfn_url: str,
+    *,
+    timeout_seconds: float = 60.0,
+    idle_latency_ms: float = 150.0,
+    stable_checks: int = 2,
+    poll_interval: float = 3.0,
+) -> None:
+    """Poll the CFN node-svc health endpoint until response latency drops.
+
+    The CFN cognition engine is single-threaded. When it's processing a
+    shared-memories ingestion or an active negotiation, its health endpoint
+    responds slowly (200-800ms). When idle it responds in < 30ms. We poll
+    until ``stable_checks`` consecutive responses each complete in under
+    ``idle_latency_ms`` milliseconds, indicating the engine is free.
+
+    This is called after ``wait_for_no_active_sessions`` to guard against
+    the case where the mycelium backend considers a session terminal but
+    CFN is still processing KXP fan-in from the previous consensus.
+
+    Raises :class:`SessionError` if the engine is still busy after
+    ``timeout_seconds``.
+    """
+    import time
+    import urllib.request
+
+    health_url = f"{cfn_url.rstrip('/')}/api/internal/diagnostics/health"
+    deadline = time.monotonic() + timeout_seconds
+    consecutive = 0
+
+    while time.monotonic() < deadline:
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen(health_url, timeout=5) as resp:
+                _ = resp.read()
+            elapsed_ms = (time.monotonic() - t0) * 1000
+        except Exception as exc:
+            log.warning("wait_for_cfn_idle: health check failed (%s) — retrying", exc)
+            consecutive = 0
+            time.sleep(poll_interval)
+            continue
+
+        if elapsed_ms < idle_latency_ms:
+            consecutive += 1
+            log.debug(
+                "wait_for_cfn_idle: %.1fms (check %d/%d)",
+                elapsed_ms,
+                consecutive,
+                stable_checks,
+            )
+            if consecutive >= stable_checks:
+                log.info(
+                    "wait_for_cfn_idle: CFN idle after %d stable checks (last=%.1fms)",
+                    stable_checks,
+                    elapsed_ms,
+                )
+                return
+        else:
+            if consecutive > 0:
+                log.debug(
+                    "wait_for_cfn_idle: reset (%.1fms >= %.1fms threshold)",
+                    elapsed_ms,
+                    idle_latency_ms,
+                )
+            consecutive = 0
+            log.info(
+                "wait_for_cfn_idle: CFN busy (%.1fms) — waiting",
+                elapsed_ms,
+            )
+
+        time.sleep(poll_interval)
+
+    raise SessionError(
+        f"CFN node-svc still busy after {timeout_seconds:.0f}s "
+        f"(health latency never dropped below {idle_latency_ms:.0f}ms for "
+        f"{stable_checks} consecutive checks)"
+    )
