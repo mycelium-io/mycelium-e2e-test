@@ -289,16 +289,31 @@ def reset_openclaw_pools_for_wants(
     *,
     idle_wait_seconds: int | None = None,
 ) -> None:
-    """Reset every openclaw pool slot on hosts used by ``wants``.
+    """Reset only the openclaw handles used by ``wants`` on each host.
 
-    Clears stale parent-room session state left by prior scenario rows on
-    a shared gateway (hub oc_oc after oc_oc_oc).
+    Clears stale parent-room session state left by prior scenario rows.
+    Previously reset the full pool slot list (all hub agents); now scoped
+    to only the roles actually used in this scenario so idle agents are
+    not penalised with unnecessary gateway resets.
     """
-    for adapter, host in sorted(adapter_hosts_from_wants(wants)):
+    # Build per-host set of handles to reset (only openclaw roles in wants).
+    host_handles: dict[str, set[str]] = {}
+    for adapter, role, host in wants:
         if adapter != "openclaw":
             continue
-        slots = pool_slots(pools, host, adapter)
-        if not slots:
+        try:
+            handle = resolve_role_handle(role, adapter, host, pools)
+        except KeyError:
+            # Role not in pool — fall back to full slot list for this host.
+            handle = None
+        if handle:
+            host_handles.setdefault(host, set()).add(handle)
+        else:
+            # Unknown role: reset entire pool for safety.
+            host_handles[host] = set(pool_slots(pools, host, adapter))
+
+    for host, handles in sorted(host_handles.items()):
+        if not handles:
             continue
         device = testbed.devices.get(host)
         if device is None:
@@ -307,8 +322,8 @@ def reset_openclaw_pools_for_wants(
             provisioner = get_provisioner("openclaw")
             reset = getattr(provisioner, "reset_device_gateway_sessions", None)
             if callable(reset):
-                reset(device, handles=slots, idle_wait_seconds=idle_wait_seconds)
+                reset(device, handles=sorted(handles), idle_wait_seconds=idle_wait_seconds)
             else:
                 log.warning("reset_openclaw_pools_for_wants: no reset on %s", host)
         except Exception as exc:  # noqa: BLE001 - hygiene is best-effort
-            log.warning("reset_openclaw_pools_for_wants: %s@%s failed: %s", adapter, host, exc)
+            log.warning("reset_openclaw_pools_for_wants: %s@%s failed: %s", "openclaw", host, exc)

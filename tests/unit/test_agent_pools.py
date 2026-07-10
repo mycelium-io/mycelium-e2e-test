@@ -89,7 +89,8 @@ def test_provision_roles_for_wants_maps_openclaw_roles(monkeypatch):
     assert calls == []
 
 
-def test_reset_openclaw_pools_resets_all_hub_slots(monkeypatch):
+def test_reset_openclaw_pools_resets_only_used_slots(monkeypatch):
+    """Reset is scoped to the roles in wants, not the full pool."""
     reset_calls: list[list[str]] = []
 
     class _OpenClawProvisioner:
@@ -104,9 +105,28 @@ def test_reset_openclaw_pools_resets_all_hub_slots(monkeypatch):
 
     reset_openclaw_pools_for_wants(testbed, wants, DEFAULT_AGENT_POOLS)
 
-    assert reset_calls == [
-        ["agent-alpha", "agent-beta", "agent-gamma", "agent-delta"],
-    ]
+    # Only agent-alpha and agent-beta should be reset, not gamma/delta.
+    assert reset_calls == [["agent-alpha", "agent-beta"]]
+
+
+def test_reset_openclaw_pools_falls_back_to_full_pool_for_unknown_role(monkeypatch):
+    """Unknown roles that aren't in the pool trigger a full-pool reset."""
+    reset_calls: list[list[str]] = []
+
+    class _OpenClawProvisioner:
+        def reset_device_gateway_sessions(self, device, *, handles=None, idle_wait_seconds=None):
+            reset_calls.append(sorted(handles or []))
+
+    monkeypatch.setattr("libs.agent_pools.get_provisioner", lambda _: _OpenClawProvisioner())
+
+    hub = SimpleNamespace(name="hub")
+    testbed = SimpleNamespace(devices={"hub": hub})
+    # "unknown-role" is not in the pool roles dict
+    wants = {("openclaw", "unknown-role", "hub")}
+
+    reset_openclaw_pools_for_wants(testbed, wants, DEFAULT_AGENT_POOLS)
+
+    assert reset_calls == [["agent-alpha", "agent-beta", "agent-delta", "agent-gamma"]]
 
 
 def test_ensure_pool_slots_skips_discovered(monkeypatch):
