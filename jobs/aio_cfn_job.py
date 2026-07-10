@@ -26,7 +26,7 @@ import jobs._common as common
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_RUNTIME = common.RUNTIME_AIO
+_DEFAULT_RUNTIME = common.RUNTIME_COMPOSE
 _ALLOWED_RUNTIMES = common.RUNTIMES_ALL
 
 
