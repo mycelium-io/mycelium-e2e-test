@@ -112,9 +112,16 @@ class EpisodeOne(aetest.Testcase):
             if r.ok:
                 log.info("Seeded: %s", key)
 
-        # Fresh agent workspaces
+        # Fresh agent workspaces. mkdtemp defaults to 0700 (this process's own
+        # uid only) — but agent_create(cwd=...) runs under MYCELIUM_LOCAL_WRITE_UID
+        # in CI (sudo -u '#1000', needed for its *other* write into the shared,
+        # backend-bind-mounted ~/.mycelium tree), so the cursor-adapter bootstrap
+        # into this workspace (.cursor/rules/mycelium.mdc) then runs as a
+        # different uid than whoever owns it. Open it up so either uid can write.
         ws_a = tempfile.mkdtemp(prefix=f"mc-{_HANDLE_A}-")
         ws_b = tempfile.mkdtemp(prefix=f"mc-{_HANDLE_B}-")
+        os.chmod(ws_a, 0o777)
+        os.chmod(ws_b, 0o777)
         testscript.parameters["workspace_a"] = ws_a
         testscript.parameters["workspace_b"] = ws_b
 
@@ -259,6 +266,8 @@ class EpisodeTwo(aetest.Testcase):
             self.skipped("Episode 1 did not run or timed out — skipping Episode 2")
         ws_a = tempfile.mkdtemp(prefix=f"mc-e2-{_HANDLE_A}-")
         ws_b = tempfile.mkdtemp(prefix=f"mc-e2-{_HANDLE_B}-")
+        os.chmod(ws_a, 0o777)
+        os.chmod(ws_b, 0o777)
         testscript.parameters["workspace_a_e2"] = ws_a
         testscript.parameters["workspace_b_e2"] = ws_b
 
