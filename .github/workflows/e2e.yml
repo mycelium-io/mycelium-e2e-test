@@ -336,11 +336,16 @@ jobs:
         if: always()
         run: |
           echo "=== pyATS Results ==="
-          RUNINFO=$(ls -td artifacts/pyats-runinfo/*/ 2>/dev/null | head -1)
-          if [ -n "$RUNINFO" ]; then
-            for logfile in "$RUNINFO"/TaskLog.rst "$RUNINFO"/TaskLog; do
-              [ -f "$logfile" ] && cat "$logfile" && break
-            done
+          # pyATS archives runinfo into --archive-dir's zip and removes the raw
+          # runinfo dir once the run completes, so it's always empty by the time
+          # this step runs -- and no pyATS version here ever writes a
+          # TaskLog.rst/TaskLog file at all (verified against an actual archive).
+          # The human-readable summary is <job-name>.report inside that zip.
+          ARCHIVE=$(ls -t artifacts/pyats-archive/*.zip 2>/dev/null | head -1)
+          if [ -n "$ARCHIVE" ]; then
+            unzip -p "$ARCHIVE" '*.report' 2>/dev/null || echo "No .report file in $ARCHIVE"
+          else
+            echo "No archive found in artifacts/pyats-archive/"
           fi
 
       - name: Collect service logs

@@ -174,44 +174,34 @@ jobs:
       - name: Write job summary
         if: always()
         run: |
-          RUNINFO=$(ls -td artifacts/pyats-runinfo/*/ 2>/dev/null | head -1)
           echo "## Tier C Canary Results (informational)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "> Results are **never a release gate**. Failures indicate compatibility observations." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "$RUNINFO" ]; then
-            echo "❌ No pyATS runinfo found — suite may have failed to start." >> "$GITHUB_STEP_SUMMARY"
+          ARCHIVE=$(ls -t artifacts/pyats-archive/*.zip 2>/dev/null | head -1)
+          if [ -z "$ARCHIVE" ]; then
+            echo "❌ No pyATS archive found — suite may have failed to start." >> "$GITHUB_STEP_SUMMARY"
           else
-            # Extract pass/fail/skip counts
-            python3 - <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
-          import os, glob, json
+            # pyATS archives runinfo into this zip and removes the raw runinfo
+            # dir once the run completes -- results.json lives inside it, under
+            # report.summary/report.result, not the flat top-level keys this
+            # once assumed (verified against an actual archive's results.json).
+            python3 - "$ARCHIVE" >> "$GITHUB_STEP_SUMMARY" <<'PYEOF'
+          import json
+          import sys
+          import zipfile
 
-          runinfo = sorted(glob.glob("artifacts/pyats-runinfo/*/"), key=os.path.getmtime, reverse=True)
-          if not runinfo:
-              print("No runinfo found.")
-              exit(0)
+          with zipfile.ZipFile(sys.argv[1]) as zf:
+              with zf.open("results.json") as f:
+                  data = json.load(f)
 
-          results_file = os.path.join(runinfo[0], "results.json")
-          if not os.path.exists(results_file):
-              # Try to read TaskLog
-              tasklog = os.path.join(runinfo[0], "TaskLog.rst")
-              if os.path.exists(tasklog):
-                  with open(tasklog) as f:
-                      content = f.read()
-                  # Find summary lines
-                  for line in content.splitlines():
-                      if any(k in line for k in ["Passed", "Failed", "Skipped", "TOTAL", "Result"]):
-                          print(f"`{line.strip()}`  ")
-              exit(0)
-
-          with open(results_file) as f:
-              data = json.load(f)
-
-          passed = data.get("passed", 0)
-          failed = data.get("failed", 0)
-          skipped = data.get("skipped", 0)
-          total = data.get("total", passed + failed + skipped)
-          result = data.get("result", "unknown").upper()
+          report = data.get("report", {})
+          summary = report.get("summary", {})
+          passed = summary.get("passed", 0)
+          failed = summary.get("failed", 0)
+          skipped = summary.get("skipped", 0)
+          total = summary.get("total", passed + failed + skipped)
+          result = report.get("result", {}).get("value", "unknown").upper()
 
           icon = "✅" if result == "PASSED" else "⚠️" if result == "SKIPPED" else "❌"
           print(f"| Metric | Value |")
