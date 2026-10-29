@@ -4,8 +4,9 @@ Gates: NEVER blocks release. Informational / canary only.
 Trigger: manual or weekly cron (canary_job.py).
 
 Tests:
-  E01 - Episode 1: two real agents negotiate; gate on 100% response rate + terminal state
-  E02 - Episode 2: same room, new session; agent_context contains Episode 1 artifacts
+  E01 - Episode 1: two real agents negotiate through the conductor's concord flow
+        in a task's thread; gate on 100% response rate + terminal state
+  E02 - Episode 2: same room, new task; agent_context contains Episode 1 artifacts
 
 Hygiene rules (from qa-coordination-platform.md):
   - Room name: domain-realistic, NOT qa-*/test-*
@@ -34,15 +35,15 @@ import shutil
 import subprocess
 import tempfile
 import time
-import uuid
 
 from pyats import aetest
 
 from libs.coordination_flow import (
+    collect_debug_info,
+    collect_room_responses,
     poll_for_terminal_state,
     setup_coordination,
-    collect_room_responses,
-    collect_debug_info,
+    start_concord,
 )
 from libs.environment import EnvironmentInfo
 from libs.mycelium_api import MyceliumAPI
@@ -59,17 +60,22 @@ _DEFAULT_CANARY_ROOM = "api-design-review"
 # Handles — neutral, not @test-alpha
 _HANDLE_A = "architect"
 _HANDLE_B = "engineer"
-_ALIGNER = "aligner"
 
 # Adapter to use for live agents. Cursor is the default since it uses
 # Cursor's own model access (no separate API key required).
 # Set MYCELIUM_CANARY_ADAPTER=claude_code to override.
 _ADAPTER = os.environ.get("MYCELIUM_CANARY_ADAPTER", "cursor")
 
-# Thresholds
-_EPISODE_TIMEOUT = 900        # 15 min per episode (real LLM is slow)
-_TURN_TIMEOUT = 180           # 3 min per turn
-_MAX_ROUNDS = 20
+# Thresholds. A concord run is anchor, propose, score, then a repair and a
+# rescore per fix, plus at most one re-ask for a reply it couldn't read. The
+# members of a step answer at once, so a step costs one real agent turn
+# (a cursor-agent call: 30-90s). _FIXES=3 bounds a run at 9 steps plus
+# re-asks, roughly 12 x 90s; the conductor's own caps (CONDUCTOR_MAX_STEPS=24
+# and the flow's max_steps=20) never come into it. A member that doesn't
+# answer costs CONDUCTOR_STEP_TIMEOUT_S (300s) for that step.
+_EPISODE_TIMEOUT = 1200       # 20 min per episode (real LLM is slow)
+_TURN_TIMEOUT = 180           # 3 min per await
+_FIXES = 3
 _SILENT_ABORT_THRESHOLD = 3  # consecutive missed turns before SILENT abort
 _META_ABORT_THRESHOLD = 2    # consecutive non-protocol turns before META abort
 
@@ -147,36 +153,43 @@ class EpisodeOne(aetest.Testcase):
 
     @aetest.test
     def episode_one_coordination(self, api: MyceliumAPI, cli: MyceliumCLI, testscript):
-        """Post opening positions, invoke aligner, monitor until l9_commit."""
+        """File a task, start concord in its thread, monitor until its commit."""
         setup = setup_coordination(
             api, cli, self.room,
             agent_handles=[_HANDLE_A, _HANDLE_B],
-            opening_positions={
-                _HANDLE_A: "I prefer a strict rate-limiting policy based on per-user quotas.",
-                _HANDLE_B: "I favour a flexible rate-limiting approach based on service tiers.",
-            },
-            aligner_handle=_ALIGNER,
+            title="Decide the API rate-limiting policy",
+            body=(
+                f"{_HANDLE_A} prefers a strict rate-limiting policy based on per-user quotas. "
+                f"{_HANDLE_B} favours a flexible approach based on service tiers."
+            ),
+            adapter=_ADAPTER,
         )
         if setup is None:
             self.failed("coordination setup failed")
 
-        # Invoke aligner — cursor agents are already awaiting via their loop processes
-        r = cli.engine_invoke(_ALIGNER, self.room,
-                              "Please mediate on API rate-limiting strategy.")
-        if not r.ok:
-            log.warning("engine invoke: %s", r.error_message)
+        # Start the run — cursor agents are already awaiting via their loop processes
+        if not start_concord(
+            cli, setup,
+            f"agree on the API rate-limiting policy. {_HANDLE_A} prefers strict per-user "
+            f"quotas; {_HANDLE_B} favours flexible limits by service tier",
+            fixes=_FIXES,
+        ):
+            self.failed("could not start the concord run")
 
-        # Monitor until l9_commit
+        # Monitor until the run's commit in the task's thread
         start = time.time()
         result = poll_for_terminal_state(
             api, self.room,
             timeout=_EPISODE_TIMEOUT,
             poll_interval=10,
+            episode=setup.episode or None,
         )
         elapsed = time.time() - start
 
         # Collect response metrics
-        snap = collect_room_responses(api, self.room, [_HANDLE_A, _HANDLE_B])
+        snap = collect_room_responses(
+            api, self.room, [_HANDLE_A, _HANDLE_B], episode=setup.episode or None
+        )
         total_turns = sum(snap.responses.values())
         testscript.parameters["e01_response_counts"] = snap.responses
         testscript.parameters["e01_terminal_state"] = (
@@ -185,15 +198,17 @@ class EpisodeOne(aetest.Testcase):
         testscript.parameters["e01_elapsed"] = elapsed
 
         log.info(
-            "Episode 1: subkind=%s elapsed=%.0fs turns=%s",
+            "Episode 1: subkind=%s min_satisfaction=%s memory=%s elapsed=%.0fs turns=%s",
             result.get("subkind") if result else "timeout",
+            result.get("min_satisfaction") if result else None,
+            result.get("memory") if result else None,
             elapsed,
             snap.responses,
         )
 
         if result is None:
             # Timeout — log as TIMEOUT, not a failure (canary never blocks release)
-            debug = collect_debug_info(api, self.room, [_HANDLE_A, _HANDLE_B])
+            debug = collect_debug_info(api, self.room, [_HANDLE_A, _HANDLE_B], setup.episode or None)
             log.error("TIMEOUT: Episode 1 did not reach terminal state. debug=%s", debug)
             self.skipped(
                 f"TIMEOUT after {_EPISODE_TIMEOUT}s — recording as compatibility observation, "
@@ -209,7 +224,7 @@ class EpisodeOne(aetest.Testcase):
             )
             return
 
-        # Gate: 100% response rate (every tick got a reply)
+        # Gate: 100% response rate (every step asked got a reply)
         # We assert this as a warning rather than hard fail — canary is informational
         missing = {h: c for h, c in snap.responses.items() if c == 0}
         if missing:
@@ -333,33 +348,43 @@ class EpisodeTwo(aetest.Testcase):
             time.sleep(3)
         testscript.parameters["agent_procs_e2"] = procs_e2
 
+        # A new task, so a new thread and run: Episode 1's commit is in its own
+        # thread and never answers for this one.
         setup = setup_coordination(
             api, cli, room,
             agent_handles=[_HANDLE_A, _HANDLE_B],
-            opening_positions={
-                _HANDLE_A: "Building on our prior decisions: I prefer strict caching rules.",
-                _HANDLE_B: "Building on our prior decisions: I favour flexible cache policies.",
-            },
-            aligner_handle=_ALIGNER,
+            title="Decide the API caching policy",
+            body=(
+                f"Building on our prior decisions: {_HANDLE_A} prefers strict caching rules, "
+                f"{_HANDLE_B} favours flexible cache policies."
+            ),
+            adapter=_ADAPTER,
         )
         if setup is None:
             self.failed("Episode 2 coordination setup failed")
 
-        r = cli.engine_invoke(_ALIGNER, room,
-                              "Please mediate the API caching strategy.")
-        if not r.ok:
-            log.warning("engine invoke episode 2: %s", r.error_message)
+        if not start_concord(
+            cli, setup,
+            f"agree on the API caching policy, building on our prior decisions. "
+            f"{_HANDLE_A} prefers strict caching rules; {_HANDLE_B} favours flexible cache policies",
+            fixes=_FIXES,
+        ):
+            self.failed("could not start the Episode 2 concord run")
 
         result = poll_for_terminal_state(
             api, room,
             timeout=_EPISODE_TIMEOUT,
             poll_interval=10,
+            episode=setup.episode or None,
         )
-        snap = collect_room_responses(api, room, [_HANDLE_A, _HANDLE_B])
+        snap = collect_room_responses(
+            api, room, [_HANDLE_A, _HANDLE_B], episode=setup.episode or None
+        )
 
         log.info(
-            "Episode 2: subkind=%s response_counts=%s",
+            "Episode 2: subkind=%s min_satisfaction=%s response_counts=%s",
             result.get("subkind") if result else "timeout",
+            result.get("min_satisfaction") if result else None,
             snap.responses,
         )
 

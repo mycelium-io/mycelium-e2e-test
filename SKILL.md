@@ -58,8 +58,8 @@ Testcase classes are imported under a `_Prefixed` alias and re-declared without 
 Test logic lives in `testcases/*.py`. Give it a stable `uid` (independent of the class name) so datafiles and CI logs can reference it durably:
 
 ```python
-class TwoStubRejectionPath(aetest.Testcase):
-    """002 — One stub always rejects → session reaches rejected terminal."""
+class TwoStubStalematePath(aetest.Testcase):
+    """002 — Neither stub rates the other's options above the bar → resolved."""
     uid = "nightly_002"
 
     @aetest.setup
@@ -67,7 +67,7 @@ class TwoStubRejectionPath(aetest.Testcase):
         ...
 
     @aetest.test
-    def session_terminates_on_rejection(self, api: MyceliumAPI, cli: MyceliumCLI):
+    def best_found_stands_when_the_fixes_run_out(self, api: MyceliumAPI, cli: MyceliumCLI):
         ...
 ```
 
@@ -108,27 +108,39 @@ def check_topology(self, testscript):
 
 ### 6. Mechanical Stub Coordination (nightly suite)
 
-`libs/stub_agent.py`'s `StubAgent` + `run_stubs_until_terminal()` drive a negotiation without any LLM: each stub calls `await`, applies a scripted or `action_fn`-computed accept/reject, and `respond`s. Cross-container variants (`libs/remote_stub.py`'s `RemoteStubAgent`) do the same over `docker exec` for spoke devices.
+Negotiation is the conductor engine's `concord` flow, and a conductor run needs a task. `setup_coordination()` creates the agents and a conductor (`engine create conductor --kind conductor`) and files a task (`board new … --json`); `run_stubs_until_terminal()` starts each stub's `await --task <row>` loop, then starts the run with `board coordinate <row> conductor "concord @~a @~b: <ask>"` and polls the task's thread for the run's commit.
+
+Each stub answers from a `libs/concord.py` `Persona`, without any LLM. A turn's prompt opens with a header naming its step (`concord · score · turn 3 of 20 · stub-a`), and the persona answers that step in its format: `bad: N - why` / `ideal: N - why` for `anchor`, an option and a `why:` line for `propose` and `repair`, and `A (…): N - why` per option for `score` and `rescore`. It replies with `respond --task <row>`, since a turn asked in a task's thread is only answered by a reply in that thread. The scenarios' personas, and the outcome each works out to, are in `libs/personas.py`. Cross-container variants (`libs/remote_stub.py`'s `RemoteStubAgent`) do the same over `docker exec` for spoke devices.
 
 ```python
-stub = StubAgent(room, "stub-accept", action="accept", cli=cli)
-result = run_stubs_until_terminal(api, [stub_a, stub_b], setup=coord, max_rounds=20, total_timeout=180)
-assert result.terminal is not None
+cast = personas.happy()
+coord = setup_coordination(api, cli, room, list(cast), title="Decide audit log retention")
+stubs = [StubAgent(room, h, p, cli=cli) for h, p in cast.items()]
+result = run_stubs_until_terminal(api, stubs, setup=coord, ask="decide how long to keep audit logs",
+                                  max_rounds=20, total_timeout=180)
+assert result.subkind == "converged"
 ```
 
-Two budgets matter and are easy to undersize: `total_timeout` (the client's own patience) and `max_rounds` (how many turns each stub thread will keep answering for). Both need headroom over how long the **mediator** actually needs — see the next pattern.
+A run ends with a `commit` whose subkind is `converged` (every member places the pick at the bar or above; the default bar is 60), `resolved` (the fixes ran out and the best option found stands) or `rejected` (nothing was proposed, or the run hit its step cap). A stalemate ends `resolved`, not `rejected`. The room's message listing shows the commit as an `l9_commit` message in the task's thread; `poll_for_terminal_state(..., episode=coord.episode)` returns its subkind, `memory` (where the decision was saved, `context/decision/<slug>`) and `min_satisfaction`.
 
-### 7. Sizing timeouts around the mediator's real step cost, not raw turn latency
+Two budgets matter and are easy to undersize: `total_timeout` (the client's own patience) and `max_rounds` (how many steps each stub thread will answer). Both need headroom over the number of steps the run takes — see the next pattern.
 
-The aligner mediates via a NEGMAS SAO mechanism capped at `ALIGNER_MEDIATOR_MAX_STEPS` (backend `app/config.py`, default 20). A raw stub `await`/`respond` round-trip is fast (single-digit seconds), but each **mechanism step** additionally costs the mediator's own LLM calls (`broker()` + `interpret()` in `app/services/mediator.py`, a real Pi-agent session) — measured at roughly 4 raw stub turns per mechanism step. A stalemate scenario (by design, in `TwoStubRejectionPath`) has to run all the way to that step cap before the mediator gives up and emits a `rejected` terminal, so its budget has to be sized against **step** cost, not turn cost:
+### 7. Sizing timeouts around the conductor's step count
+
+A `concord` run is a known sequence of steps: `anchor`, `propose`, `score`, then one `repair` (asked of the member least happy with the pick) and one `rescore` per fix, until the pick meets everyone's bar or the fixes run out. The flow allows 5 fixes; a summon can set fewer with `fixes=N`. On top of that the conductor asks a step once more of a member whose reply it couldn't read, and sends a fix back once when it repeats an option already on the table. A step asks its members at once and waits for all of them, so it costs one round trip: well under 10s for a stub, 30-90s for a real agent.
+
+Size a test's budget from the steps its scenario takes:
 
 ```python
-# ~4 raw turns per mechanism step; 20 steps needs ~80 raw turns.
-_REJECTION_MAX_ROUNDS = 45          # own budget — don't reuse a smaller shared constant
-_REJECTION_TOTAL_TIMEOUT = 660      # ≈ 20 steps × 4 turns × ~8s/turn, with margin
+# Stalemate with fixes=2: anchor, propose, score, 2 x (repair, rescore) = 7 steps,
+# plus one if a fix is sent back as a repeat.
+_FIXES = 2
+_TOTAL_TIMEOUT = 360
 ```
 
-If a rejection-path (or any genuinely-non-converging) test times out with `terminal=None`, check whether the client gave up (or the stub threads ran out of rounds) before the mediator ever reached its step cap — that reads in the backend log as the mediator's own step counter (`"mediator failed to prompt @handle (step N)"` on failure) sitting well below the cap when the room gets torn down. A flood of SLIM `"Session already closed or dropped"` warnings right after is a *symptom* of that premature teardown racing the still-running mediator thread, not a SLIM bug — don't chase it as one.
+The conductor's own limits sit well above these runs: `CONDUCTOR_MAX_STEPS` (backend `app/config.py`, 24) and the flow's `max_steps` (20) cap the steps, the smaller one winning, and the run ends `rejected` when it reaches the cap. `CONDUCTOR_STEP_TIMEOUT_S` (300) is how long a step waits for a member; a member that doesn't answer is recorded as silent and the run moves on. A silent rater leaves the pick unrated by them, which also ends the run `resolved`, so a non-converging test should check its stub actually answered (`TwoStubStalematePath` checks stub-reject answered a `repair` step).
+
+If a test times out with `terminal=None`, read the run's record, a `log/episodes/<id>` memory in the room that the conductor writes from the run's start and updates after every step: its trace lists each step taken and who was silent in it. A run still at `anchor` means the stubs never got the first step (check they await with `--task` and the summon named them); a run that stopped partway means the client gave up or the stub threads ran out of rounds while it was still walking.
 
 ### 8. Datafile Inheritance with `extends:`
 
@@ -181,7 +193,9 @@ Filter with `MYCELIUM_E2E_GROUPS` (comma-separated, OR'd — see `jobs/_common.p
 | `libs/mycelium_api.py` | `MyceliumAPI` | Backend REST client (rooms, memory, sessions, agent-context) |
 | `libs/mycelium_cli.py` | `MyceliumCLI` | CLI subprocess wrapper; handles the `MYCELIUM_LOCAL_WRITE_UID` switch |
 | `libs/environment.py` | `EnvironmentInfo`, `detect_environment` | Service probing and skip-flag detection |
-| `libs/coordination_flow.py` | `setup_coordination`, `poll_for_terminal_state`, `wait_for_coordination_join` | Room + agents + opening positions; terminal-state/join polling |
+| `libs/coordination_flow.py` | `setup_coordination`, `start_concord`, `poll_for_terminal_state`, `wait_for_coordination_join` | Agents + conductor + task; starting a concord run; commit/join polling |
+| `libs/concord.py` | `Persona`, `parse_step`, `summon` | Scripted answers to each concord step, in the formats the conductor reads |
+| `libs/personas.py` | `happy`, `counter`, `stalemate`, `hub_spoke` | The nightly scenarios' personas, and the outcome each works out to |
 | `libs/stub_agent.py` | `StubAgent`, `run_stubs_until_terminal` | Mechanical single-process stub negotiation |
 | `libs/remote_stub.py` | `RemoteStubAgent`, `run_remote_stubs_until_terminal` | Same, driven over `docker exec` on spoke devices |
 | `libs/agent_pools.py` | — | Provisioner-backed agent pool for `hub_and_spoke_tests.py`-style scenarios |
@@ -195,4 +209,4 @@ Filter with `MYCELIUM_E2E_GROUPS` (comma-separated, OR'd — see `jobs/_common.p
 3. **`uid` over class name for identity** — testcase `uid`s (unprefixed for the PR suite, `nightly_*`/`canary_*` for the others) are what CI logs and datafiles reference; class names can be re-aliased per suite without breaking that.
 4. **Owned-room tracking** — `testscript.parameters["owned_rooms"]` is the only thing `MyceliumCommonCleanup` trusts; a testcase that creates a room outside of it leaks state across runs.
 5. **The canary suite never blocks** — `canary_job.py`/`weekly-e2e.yaml` treat every failure as informational (`max_failures: 0`, `continue-on-error: true`). It exists to catch live-LLM compatibility drift, not to gate merges.
-6. **Timeouts sized against the mediator's real cost** — see pattern 7 above. This was the root cause the last time a nightly-suite stalemate test looked like a SLIM bug and wasn't.
+6. **Timeouts sized against the run's step count** — see pattern 7 above. A budget smaller than the steps a scenario takes reads as a hang (`terminal=None`) rather than as the outcome the scenario was built for.
