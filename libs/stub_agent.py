@@ -1,20 +1,18 @@
 """Stub agent driver for nightly coordination tests.
 
-Correct SLIM-native stub flow:
-  1. ``setup_coordination`` creates agents and posts opening positions.
-  2. Stub threads start ``mycelium await`` — this registers presence
-     (generates coordination_join) so the aligner can see them.
-  3. Main thread waits briefly for all coordination_join events, then
-     invokes the aligner engine.
-  4. Aligner sees agents present with opening positions → starts rounds.
-  5. Each stub's ``await`` returns with a tick; stub calls ``respond``.
-  6. Repeat until l9_commit (converged or rejected) appears in room.
-
-Position markers appended to respond text::
-
-    [<accept>]   accept current proposal
-    [<reject>]   reject; no counter
-    [<counter>]  counter-offer
+A stub answers the conductor's ``concord`` steps from a scripted
+:class:`~libs.concord.Persona`, with no LLM:
+  1. ``setup_coordination`` creates the agents and the conductor and files
+     the task the run happens in.
+  2. Stub threads start ``mycelium await --task <row>``, which registers
+     their presence (``coordination_join``) and wakes them only on the
+     task's thread.
+  3. The main thread waits briefly for every join, then starts the run with
+     ``board coordinate <row> conductor "concord @~a @~b: <ask>"``.
+  4. Each turn's prompt names its step (``concord · score · turn 3 of 20 · …``);
+     the stub answers it in that step's format with ``respond --task <row>``.
+  5. Repeat until the run's commit (converged, resolved or rejected) appears
+     in the task's thread.
 """
 
 from __future__ import annotations
@@ -24,30 +22,32 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any
 
-from libs.mycelium_api import MyceliumAPI
-from libs.mycelium_cli import MyceliumCLI
+from libs import concord
 from libs.coordination_flow import (
     CoordinationSetup,
-    collect_debug_info,
     poll_for_terminal_state,
+    start_concord,
     wait_for_coordination_join,
 )
+from libs.mycelium_api import MyceliumAPI
+from libs.mycelium_cli import MyceliumCLI
 
 log = logging.getLogger(__name__)
 
-Action = Literal["accept", "reject", "counter"]
-
 CODE_SILENT = "SILENT"
 CODE_OK = "OK"
+#: A turn that wasn't a ``concord`` step (nothing the stub should answer).
+CODE_SKIPPED = "SKIPPED"
 
 
 @dataclass
 class TurnResult:
     handle: str
     round_num: int
-    action: Action
+    #: The concord step answered (``anchor``, ``score``…), or "" when none.
+    step: str
     ok: bool
     code: str = CODE_OK
     detail: str = ""
@@ -64,65 +64,60 @@ class StubRunResult:
         return bool(self.terminal and self.terminal.get("converged"))
 
     @property
+    def subkind(self) -> str | None:
+        return self.terminal.get("subkind") if self.terminal else None
+
+    @property
     def response_rate(self) -> float:
         if not self.turns:
             return 0.0
         return sum(1 for t in self.turns if t.ok) / len(self.turns)
 
 
-def _default_prose(action: Action) -> str:
-    if action == "accept":
-        return "Agreed, I can accept this proposal."
-    if action == "reject":
-        return "This does not meet my requirements."
-    return "I propose a modified approach to resolve the gap."
+def _idle(stdout: str) -> bool:
+    """Whether ``await --json`` came back empty: nothing asked within its timeout."""
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return isinstance(data, dict) and "message" in data and data["message"] is None
 
 
 class StubAgent:
-    """Single-handle stub that responds with a scripted action per turn."""
+    """Single-handle stub that answers each concord step from its persona."""
 
     def __init__(
         self,
         room: str,
         handle: str,
-        action: Action = "accept",
-        prose: str = "",
+        persona: concord.Persona,
         cli: MyceliumCLI | None = None,
-        action_fn: Callable[[int, dict], Action] | None = None,
     ):
         self.room = room
         self.handle = handle
-        self.default_action = action
-        self.prose = prose
+        self.persona = persona
         self.cli = cli or MyceliumCLI()
-        self.action_fn = action_fn
-
-    def _choose_action(self, round_num: int, turn_json: dict) -> Action:
-        if self.action_fn is not None:
-            return self.action_fn(round_num, turn_json)
-        return self.default_action
-
-    def _respond_text(self, action: Action) -> str:
-        body = self.prose or _default_prose(action)
-        return f"{body} [<{action}>]"
 
     def await_and_respond(
         self,
         round_num: int,
         turn_timeout: int,
         stop_event: threading.Event,
-    ) -> TurnResult:
-        """Call await; if a tick arrives, respond. Return a TurnResult."""
-        await_r = self.cli.await_turn(self.room, self.handle, timeout=turn_timeout)
+        task: str | None = None,
+    ) -> TurnResult | None:
+        """Call await; if a step arrives, answer it. ``None`` when nothing was
+        asked within *turn_timeout* (the run was asking someone else)."""
+        await_r = self.cli.await_turn(self.room, self.handle, timeout=turn_timeout, task=task)
 
         if stop_event.is_set():
             # Terminal already reached while we were awaiting — not a failure
-            return TurnResult(self.handle, round_num, self.default_action, ok=True,
-                              detail="stop_event set")
+            return TurnResult(self.handle, round_num, "", ok=True, detail="stop_event set")
 
         if not await_r.ok:
+            if _idle(await_r.stdout):
+                return None
             return TurnResult(
-                self.handle, round_num, self.default_action, ok=False,
+                self.handle, round_num, "", ok=False,
                 code=CODE_SILENT,
                 detail=await_r.error_message or f"await rc={await_r.returncode}",
             )
@@ -134,10 +129,15 @@ class StubAgent:
             except json.JSONDecodeError:
                 pass
 
-        action = self._choose_action(round_num, turn_json)
-        respond_r = self.cli.respond(self.room, self.handle, self._respond_text(action))
+        prompt = concord.turn_prompt(turn_json)
+        answer = self.persona.reply(prompt)
+        if answer is None:
+            log.info("Stub %s: not a concord step, not answering: %r", self.handle, prompt[:120])
+            return TurnResult(self.handle, round_num, "", ok=True, code=CODE_SKIPPED)
+        step, text = answer
+        respond_r = self.cli.respond(self.room, self.handle, text, task=task)
         return TurnResult(
-            self.handle, round_num, action,
+            self.handle, round_num, step,
             ok=respond_r.ok,
             code=CODE_OK if respond_r.ok else CODE_SILENT,
             detail=respond_r.error_message if not respond_r.ok else "",
@@ -149,19 +149,25 @@ def run_stubs_until_terminal(
     stubs: list[StubAgent],
     *,
     setup: CoordinationSetup,
+    ask: str,
+    fixes: int | None = None,
+    bar: int | None = None,
     max_rounds: int = 30,
     turn_timeout: int = 90,
     join_wait: int = 10,
     total_timeout: int = 600,
 ) -> StubRunResult:
-    """Drive stubs through the correct SLIM-native coordination flow.
+    """Drive stubs through one ``concord`` run in the setup's task.
 
     Flow:
-      1. Start stub threads — each calls ``await`` immediately, registering
-         presence (coordination_join).
+      1. Start stub threads — each calls ``await --task`` immediately,
+         registering presence (coordination_join).
       2. Wait for all coordination_join events (up to *join_wait* seconds).
-      3. Invoke the aligner engine in the main thread.
-      4. Stub threads respond to ticks until l9_commit appears or timeout.
+      3. Start the run (``board coordinate``) over the stubs, in their order.
+      4. Stub threads answer steps until the commit appears or timeout.
+
+    *max_rounds* bounds how many steps each stub answers; an ``await`` that
+    times out with nothing asked doesn't count against it.
     """
     result = StubRunResult()
     stop_event = threading.Event()
@@ -169,21 +175,25 @@ def run_stubs_until_terminal(
     cli = stubs[0].cli if stubs else MyceliumCLI()
 
     def run_stub(stub: StubAgent) -> None:
-        for round_num in range(max_rounds):
-            if stop_event.is_set():
-                break
-            turn_result = stub.await_and_respond(round_num, turn_timeout, stop_event)
+        answered = 0
+        while answered < max_rounds and not stop_event.is_set():
+            turn_result = stub.await_and_respond(
+                answered, turn_timeout, stop_event, task=setup.task_key
+            )
+            if turn_result is None:
+                continue
             if stop_event.is_set() and turn_result.detail == "stop_event set":
                 break
+            answered += 1
             with lock:
                 result.turns.append(turn_result)
             if not turn_result.ok:
                 log.warning(
                     "Stub %s round %d: %s — %s",
-                    stub.handle, round_num, turn_result.code, turn_result.detail,
+                    stub.handle, turn_result.round_num, turn_result.code, turn_result.detail,
                 )
             else:
-                log.debug("Stub %s round %d: %s", stub.handle, round_num, turn_result.action)
+                log.debug("Stub %s round %d: %s", stub.handle, turn_result.round_num, turn_result.step)
 
     # ── Phase 1: start await threads ─────────────────────────────────────────
     threads = [threading.Thread(target=run_stub, args=(s,), daemon=True) for s in stubs]
@@ -194,20 +204,12 @@ def run_stubs_until_terminal(
     expected_handles = [s.handle for s in stubs]
     joined = wait_for_coordination_join(api, setup.room, expected_handles, timeout=join_wait)
     if not joined:
-        log.warning(
-            "Not all agents joined within %ds — invoking aligner anyway", join_wait
-        )
+        log.warning("Not all agents joined within %ds — starting the run anyway", join_wait)
 
-    # ── Phase 3: invoke aligner ───────────────────────────────────────────────
-    r = cli.engine_invoke(
-        setup.aligner_handle,
-        setup.room,
-        message="Please mediate the participants to an agreement.",
-    )
-    if not r.ok:
-        log.error("engine invoke failed: %s", r.error_message)
+    # ── Phase 3: start the concord run in the task's thread ──────────────────
+    start_concord(cli, setup, ask, handles=expected_handles, bar=bar, fixes=fixes)
 
-    # ── Phase 4: poll for l9_commit terminal ─────────────────────────────────
+    # ── Phase 4: poll for the commit in the task's thread ────────────────────
     deadline = time.time() + total_timeout
     seen_ids: set[str] = set()
     while time.time() < deadline:
@@ -215,12 +217,14 @@ def run_stubs_until_terminal(
             api, setup.room,
             timeout=5, poll_interval=2,
             seen_message_ids=seen_ids,
+            episode=setup.episode or None,
         )
         if terminal is not None:
             result.terminal = terminal
             log.info(
-                "Terminal state: subkind=%s converged=%s",
+                "Terminal state: subkind=%s converged=%s min_satisfaction=%s memory=%s",
                 terminal.get("subkind"), terminal.get("converged"),
+                terminal.get("min_satisfaction"), terminal.get("memory"),
             )
             stop_event.set()
             break

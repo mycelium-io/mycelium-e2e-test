@@ -33,8 +33,11 @@ libs/                            Shared libraries
   mycelium_api.py                Backend HTTP REST client
   mycelium_cli.py                CLI subprocess wrapper (handles the local-write uid switch)
   environment.py                 Service probing and skip-flag detection
-  coordination_flow.py           setup_coordination() — room + agents + opening positions;
-                                  poll_for_terminal_state(), wait_for_coordination_join()
+  coordination_flow.py           setup_coordination() — agents + conductor + task;
+                                  start_concord(), poll_for_terminal_state(),
+                                  wait_for_coordination_join()
+  concord.py                     Scripted answers to the conductor's concord steps (Persona)
+  personas.py                    The nightly scenarios' personas and their expected outcomes
   stub_agent.py                  Mechanical StubAgent + run_stubs_until_terminal()
   remote_stub.py                 RemoteStubAgent — stub driven over docker exec (spokes)
   agent_pools.py                 Provisioner-backed agent pool for multi-device tests
@@ -70,7 +73,7 @@ docs/                            Historical investigation writeups (not living d
 | Suite | Job | UIDs | Real LLM? | Blocks release? |
 |-------|-----|------|-----------|------------------|
 | **PR** | `pr_job.py` | `BackendHealth`, `RoomLifecycle`, `CLIBasics`, `MemoryCRUD`, `BriefingContract`, `MemorySearch`, `SessionAPIShape`, `RespondWithoutAwait`, `RoomDeleteIdempotent`, `AgentContextEndpointShape` | No | Yes — every PR |
-| **Nightly** | `nightly_job.py` (runs `pr_suite.py` then `nightly_suite.py`) | `nightly_001`–`006` (`TwoStubHappyPath`, `TwoStubRejectionPath`, `CounterOfferChain`, `RespondWithoutTurnRejected`, `CrossEpisodeMemory`, `MultiSessionResponseRate`), `nightly_HUB01`/`HUB02` | No — mechanical stubs (opt-in real cursor via `MYCELIUM_E2E_USE_CURSOR_STUBS=1`) | Yes — nightly + pre-release |
+| **Nightly** | `nightly_job.py` (runs `pr_suite.py` then `nightly_suite.py`) | `nightly_001`–`006` (`TwoStubHappyPath`, `TwoStubStalematePath`, `CounterOfferChain`, `RespondWithoutTurnRejected`, `CrossEpisodeMemory`, `MultiSessionResponseRate`), `nightly_HUB01`/`HUB02` | No — mechanical stubs (opt-in real cursor via `MYCELIUM_E2E_USE_CURSOR_STUBS=1`) | Yes — nightly + pre-release |
 | **Canary** | `canary_job.py` | `canary_E01`, `canary_E02` | Yes — real cursor agent by default | No — informational only |
 
 The PR and nightly suites need no LLM credentials at all; the canary suite needs `LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL` and, for the cursor adapter, `CURSOR_API_KEY`.

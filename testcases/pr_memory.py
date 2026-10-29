@@ -86,8 +86,8 @@ class MemoryCRUD(aetest.Testcase):
 class BriefingContract(aetest.Testcase):
     """Briefing contract: work rows appear in agent_context; resolved rows are omitted.
 
-    Tests the GET /api/rooms/{room}/agent-context endpoint which the
-    aligner uses to build per-agent briefings.
+    Tests the GET /api/rooms/{room}/agent-context endpoint, the compact
+    briefing an agent reads into its prompt.
     """
 
     @aetest.setup

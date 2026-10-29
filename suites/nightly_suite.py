@@ -11,7 +11,7 @@ from pyats import aetest
 
 from testcases.common_setup_cleanup import MyceliumCommonSetup, MyceliumCommonCleanup
 from testcases.nightly_stub_coord import TwoStubHappyPath as _TwoStubHappyPath
-from testcases.nightly_stub_coord import TwoStubRejectionPath as _TwoStubRejectionPath
+from testcases.nightly_stub_coord import TwoStubStalematePath as _TwoStubStalematePath
 from testcases.nightly_stub_coord import CounterOfferChain as _CounterOfferChain
 from testcases.nightly_stub_coord import RespondWithoutTurnRejected as _RespondWithoutTurnRejected
 from testcases.nightly_stub_coord import CrossEpisodeMemory as _CrossEpisodeMemory
@@ -30,7 +30,7 @@ class TwoStubHappyPath(_TwoStubHappyPath):
     pass
 
 
-class TwoStubRejectionPath(_TwoStubRejectionPath):
+class TwoStubStalematePath(_TwoStubStalematePath):
     pass
 
 

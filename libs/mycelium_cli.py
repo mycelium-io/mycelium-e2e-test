@@ -170,22 +170,49 @@ class MyceliumCLI:
         room: str,
         handle: str,
         timeout: int = 120,
+        task: str | None = None,
     ) -> CLIResult:
-        """Block until a turn arrives for *handle* in *room*. Returns JSON turn."""
-        return self.run(
-            "await", "--room", room, "--handle", handle,
-            "--timeout", str(timeout), "--json",
-            timeout=timeout + 15,
-            json_mode=False,
-        )
+        """Block until a turn arrives for *handle* in *room* (in *task*'s thread
+        only, when given). Returns the JSON turn; exits 1 with
+        ``{"message": null}`` when nothing came within *timeout*."""
+        args = ["await", "--room", room, "--handle", handle, "--timeout", str(timeout), "--json"]
+        if task:
+            args.extend(["--task", task])
+        return self.run(*args, timeout=timeout + 15, json_mode=False)
 
-    def respond(self, room: str, handle: str, text: str) -> CLIResult:
-        """Publish a reply for *handle* in *room*.
+    def respond(self, room: str, handle: str, text: str, task: str | None = None) -> CLIResult:
+        """Publish a reply for *handle* in *room*, or in *task*'s thread when given.
 
-        Append a position marker to *text* if desired:
-        ``"I can accept this [<accept>]"``
+        A turn asked in a task's thread is only answered by a reply in that
+        thread, so a stub answering the conductor passes the task.
         """
-        return self.run("respond", "--room", room, "--handle", handle, text, timeout=30)
+        args = ["respond", "--room", room, "--handle", handle]
+        if task:
+            args.extend(["--task", task])
+        return self.run(*args, text, timeout=30)
+
+    # ── Board ─────────────────────────────────────────────────────────────
+
+    def board_new(self, room: str, title: str, body: str = "", actor: str = "") -> CLIResult:
+        """File a task; ``--json`` prints its memory record (``key``, ``episode``)."""
+        args = ["board", "new", title]
+        if body:
+            args.append(body)
+        args.extend(["--room", room])
+        if actor:
+            args.extend(["--as", actor])
+        args.append("--json")
+        return self.run(*args, timeout=30)
+
+    def board_coordinate(
+        self, room: str, row: str, engine: str, ask: str, actor: str = ""
+    ) -> CLIResult:
+        """Open a coordination phase on *row*, run by *engine*: for the
+        conductor, *ask* names the flow first (``concord @~a @~b: …``)."""
+        args = ["board", "coordinate", row, engine, ask, "--room", room]
+        if actor:
+            args.extend(["--as", actor])
+        return self.run(*args, timeout=30)
 
     # ── Agent / Engine commands ───────────────────────────────────────────
 
@@ -216,7 +243,7 @@ class MyceliumCLI:
             args.append(message)
         return self.run(*args, timeout=60)
 
-    def engine_create(self, handle: str, room: str, kind: str = "aligner") -> CLIResult:
+    def engine_create(self, handle: str, room: str, *, kind: str) -> CLIResult:
         return self.run(
             "engine", "create", handle, "--room", room, "--kind", kind,
             timeout=60, local_write=True,

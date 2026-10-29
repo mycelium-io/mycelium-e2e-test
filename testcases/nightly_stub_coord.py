@@ -1,19 +1,26 @@
 """Nightly checks — stub agent coordination tests.
 
-Gates: nightly / pre-release. No real LLM — stubs respond mechanically.
+Gates: nightly / pre-release. No real LLM — stubs answer from scripted personas.
 
-SLIM-native flow (per test):
-  1. setup_coordination: creates agents, posts opening positions, creates aligner
+Flow (per test):
+  1. setup_coordination: creates the agents and the conductor engine, and
+     files the task the run happens in
   2. run_stubs_until_terminal:
-       a. Stubs start await (generates coordination_join → presence)
-       b. Main thread invokes aligner once all stubs have joined
-       c. Aligner starts rounds; stubs respond per tick
-       d. Poll for l9_commit (converged or rejected)
+       a. Stubs start ``await --task`` (generates coordination_join → presence)
+       b. Main thread starts the conductor's ``concord`` flow in the task's
+          thread once all stubs have joined
+       c. The conductor asks each step; stubs answer it in its format
+       d. Poll the task's thread for the commit (converged, resolved, rejected)
+
+The personas and the outcome each scenario works out to are in
+``libs/personas.py``.
 
 Tests:
-  001 - Happy path: two stubs accept every turn → converged
-  002 - Rejection path: one stub always rejects → rejected after round budget
-  003 - Counter-offer chain: stub B counters N rounds then accepts → converged
+  001 - Happy path: each stub rates the other's option above the bar → converged
+  002 - Stalemate: each stub rates only its own number above the bar → the fixes
+        run out and the best found stands → resolved
+  003 - Counter-offer chain: the first pick leaves stub-proposer short, its fix
+        meets everyone's bar → converged
   004 - Respond without active await is rejected by backend
   005 - Cross-episode memory: session 1 writes a work/ row → session 2 agent_context contains it
   006 - Multi-session 100% response rate
@@ -27,8 +34,11 @@ import uuid
 
 from pyats import aetest
 
+from libs import personas
+from libs.concord import DEFAULT_BAR
 from libs.coordination_flow import (
-    CoordinationSetup,
+    SUBKIND_CONVERGED,
+    SUBKIND_RESOLVED,
     collect_debug_info,
     setup_coordination,
 )
@@ -40,24 +50,36 @@ log = logging.getLogger(__name__)
 
 parameters = {}
 
-_STUB_TOTAL_TIMEOUT = 180   # seconds for full stub run
-_TURN_TIMEOUT = 60          # seconds for a single await call
-_MAX_ROUNDS = 20
-_JOIN_WAIT = 10             # seconds to wait for coordination_join events
+# A concord step asks its members at once and waits for every answer, so a
+# step costs one stub round trip (await returns, `respond` posts: well under
+# 10s) plus the conductor's own bookkeeping. A run of N steps needs about
+# N x 10s. A stub that never answers costs CONDUCTOR_STEP_TIMEOUT_S (300s)
+# per step before the conductor moves on, which these budgets don't cover on
+# purpose: a silent stub is a failure here, not a slow pass.
+_HAPPY_TOTAL_TIMEOUT = 180     # anchor, propose, score: 3 steps
+_COUNTER_TOTAL_TIMEOUT = 240   # + one repair and its rescore: 5 steps
+_TURN_TIMEOUT = 60             # seconds for a single await call
+_MAX_ROUNDS = 20               # steps a stub answers before its thread stops
+_JOIN_WAIT = 10                # seconds to wait for coordination_join events
+
+_TITLE = "Decide audit log retention"
+_ASK = "decide how long to keep audit logs, given the storage budget and the audit obligation"
 
 
 def _fresh_room(suffix: str = "") -> str:
     return f"qa-coord-fresh-{suffix or uuid.uuid4().hex[:8]}"
 
 
-# Stub opening positions — domain-realistic, not test-metadata
-_POS_A = "I believe a 30-day retention window balances cost and compliance needs."
-_POS_B = "I think 90-day retention is required to meet our audit obligations."
-_POS_COUNTER = "I propose 60-day retention as a compromise between cost and compliance."
+def _stubs(room: str, cli: MyceliumCLI, cast: dict) -> list[StubAgent]:
+    return [StubAgent(room, handle, persona, cli=cli) for handle, persona in cast.items()]
+
+
+def _answered(r: StubRunResult, handle: str, step: str) -> bool:
+    return any(t.handle == handle and t.step == step and t.ok for t in r.turns)
 
 
 class TwoStubHappyPath(aetest.Testcase):
-    """001 — Two stubs accept every turn → session converges."""
+    """001 — Each stub rates the other's option above the bar → converged."""
 
     uid = "nightly_001"
 
@@ -66,44 +88,39 @@ class TwoStubHappyPath(aetest.Testcase):
         self.room = _fresh_room()
         testscript.parameters.setdefault("owned_rooms", set()).add(self.room)
         api.create_room(self.room, description="Nightly stub happy path")
-        self.coord = setup_coordination(
-            api, cli, self.room,
-            agent_handles=["stub-a", "stub-b"],
-            opening_positions={"stub-a": _POS_A, "stub-b": _POS_B},
-        )
+        self.cast = personas.happy()
+        self.coord = setup_coordination(api, cli, self.room, list(self.cast), title=_TITLE)
         if self.coord is None:
             self.failed("coordination setup failed")
 
     @aetest.test
     def stubs_converge(self, api: MyceliumAPI, cli: MyceliumCLI):
-        stubs = [
-            StubAgent(self.room, "stub-a", action="accept", cli=cli),
-            StubAgent(self.room, "stub-b", action="accept", cli=cli),
-        ]
         run_result = run_stubs_until_terminal(
-            api, stubs, setup=self.coord,
+            api, _stubs(self.room, cli, self.cast), setup=self.coord, ask=_ASK,
             max_rounds=_MAX_ROUNDS, turn_timeout=_TURN_TIMEOUT,
-            join_wait=_JOIN_WAIT, total_timeout=_STUB_TOTAL_TIMEOUT,
+            join_wait=_JOIN_WAIT, total_timeout=_HAPPY_TOTAL_TIMEOUT,
         )
-        self._assert_terminal(run_result, expect_converged=True)
+        self._assert_converged(api, run_result, _HAPPY_TOTAL_TIMEOUT)
 
-    def _assert_terminal(self, r: StubRunResult, *, expect_converged: bool) -> None:
-        if r.timed_out:
+    def _assert_converged(self, api: MyceliumAPI, r: StubRunResult, budget: int) -> None:
+        if r.timed_out or r.terminal is None:
+            debug = collect_debug_info(api, self.room, list(self.cast), self.coord.episode)
+            self.failed(f"TIMEOUT: no commit within {budget}s. debug={debug}")
+        if not r.converged:
             self.failed(
-                f"TIMEOUT: no terminal state within {_STUB_TOTAL_TIMEOUT}s. "
-                f"debug={collect_debug_info(None, self.room, ['stub-a','stub-b'])}"
-                if False else f"TIMEOUT: no terminal state within {_STUB_TOTAL_TIMEOUT}s."
+                f"Expected converged, got subkind={r.subkind!r} "
+                f"min_satisfaction={r.terminal.get('min_satisfaction')!r}. "
+                f"turns={[(t.handle, t.step, t.code) for t in r.turns]}"
             )
-        if r.terminal is None:
-            self.failed("No terminal state detected")
-        if expect_converged and not r.converged:
-            self.failed(
-                f"Expected converged, got subkind={r.terminal.get('subkind')!r}. "
-                f"turns={[(t.handle, t.action, t.code) for t in r.turns]}"
-            )
+        lowest = r.terminal.get("min_satisfaction")
+        assert lowest is not None and lowest >= DEFAULT_BAR, (
+            f"converged with min_satisfaction={lowest!r}, below the bar {DEFAULT_BAR}"
+        )
+        memory = r.terminal.get("memory") or ""
+        assert memory.startswith("context/decision/"), f"decision not saved: memory={memory!r}"
         log.info(
-            "Terminal: subkind=%s converged=%s turns=%d response_rate=%.0f%%",
-            r.terminal.get("subkind"), r.converged, len(r.turns), r.response_rate * 100,
+            "Terminal: subkind=%s min_satisfaction=%s memory=%s turns=%d response_rate=%.0f%%",
+            r.subkind, lowest, memory, len(r.turns), r.response_rate * 100,
         )
 
     @aetest.cleanup
@@ -111,157 +128,59 @@ class TwoStubHappyPath(aetest.Testcase):
         api.delete_room(self.room)
 
 
-class TwoStubRejectionPath(aetest.Testcase):
-    """002 — One stub always rejects → session reaches rejected terminal."""
+class TwoStubStalematePath(aetest.Testcase):
+    """002 — Neither stub rates the other's options above the bar → resolved."""
 
     uid = "nightly_002"
+
+    # A stalemate only ends when the fixes run out: after every pick the
+    # least happy stub is asked for a fix and everyone rates it, so each fix
+    # costs two steps. fixes=2 (the flow's own default is 5) makes it
+    # anchor, propose, score, then 2 x (repair, rescore): 7 steps, plus one
+    # more if the conductor sends a fix back as a repeat of an earlier option.
+    _FIXES = 2
+    _TOTAL_TIMEOUT = 360
 
     @aetest.setup
     def setup(self, api: MyceliumAPI, cli: MyceliumCLI, testscript):
         self.room = _fresh_room()
         testscript.parameters.setdefault("owned_rooms", set()).add(self.room)
-        api.create_room(self.room, description="Nightly stub rejection")
-        self.coord = setup_coordination(
-            api, cli, self.room,
-            agent_handles=["stub-accept", "stub-reject"],
-            opening_positions={
-                "stub-accept": _POS_A,
-                # Vague, dimensionless prose here ("I will not accept any
-                # compromise on this matter") occasionally left the aligner's
-                # LLM-driven issue-discovery step with nothing to structure a
-                # discussion around, so it rejected immediately with zero
-                # ticks sent to either stub — a legitimate "rejected" outcome,
-                # but one that never exercises the actual reject response this
-                # test is about. A concrete, issue-bearing (if absolute)
-                # position gives it real material every time, same as every
-                # other passing test's positions do.
-                "stub-reject": (
-                    "I think 90-day retention is required to meet our audit "
-                    "obligations, and I will not accept anything shorter under "
-                    "any circumstances."
-                ),
-            },
-        )
+        api.create_room(self.room, description="Nightly stub stalemate")
+        self.cast = personas.stalemate()
+        self.coord = setup_coordination(api, cli, self.room, list(self.cast), title=_TITLE)
         if self.coord is None:
             self.failed("coordination setup failed")
 
     @aetest.test
-    def session_terminates_on_rejection(self, api: MyceliumAPI, cli: MyceliumCLI):
-        def _accept_only_30(round_num: int, turn_json: dict) -> str:
-            # An unconditional accepter accepts whatever lands on the table —
-            # including stub-reject's own number — which converges every
-            # time regardless of stub-reject's mechanical position. Accepting
-            # only its own stated number (30) guarantees the two numbers
-            # never meet, so the round budget — not mediator luck — is what
-            # produces rejected. This decides the RESPOND-turn action; see
-            # the prose= comment below for why the PROPOSE-turn text matters
-            # just as much.
-            #
-            # _prompt_for's template is fixed and always exactly four
-            # "\n\n"-separated paragraphs: [0] the issue-space preamble,
-            # [1] "MEDIATOR: {note}" (LLM free text — never trust it),
-            # [2] "{role} (2 sentences max.)" — programmatically built by
-            # _prompt_for itself, never LLM-generated, and the *only* place
-            # the real current-round offer is guaranteed to live,
-            # [3] the constant _BATNA paragraph. Index into [2] directly
-            # instead of pattern-matching across the whole prompt.
-            prompt = (turn_json or {}).get("prompt") or ""
-            parts = prompt.split("\n\n")
-            offer_text = parts[2] if len(parts) > 2 else ""
-            return "accept" if "30" in offer_text else "reject"
-
-        stubs = [
-            # prose= gives interpret() (mediator.py) a stable number to
-            # anchor on for BOTH turn kinds — not just an unambiguous
-            # reject/accept signal for RESPOND turns, which is all earlier
-            # attempts here addressed and which still left this falsely
-            # converging in CI. Root-caused via a temporary debug patch to
-            # mediator.py logging every interpret() call's prose -> reading:
-            # on a PROPOSE turn, interpret() is asked for a *counter offer*,
-            # and a numberless reject-flavored text ("This does not meet my
-            # requirements.", the StubAgent default) gives it nothing to
-            # extract — so it HALLUCINATES one, and not just any value: it
-            # escalated round over round (30 -> 45 -> 60 -> 75 -> 90),
-            # confirmed live in the debug trace. Once that fabricated offer
-            # coincidentally hit stub-reject's real number (90), interpret()
-            # re-read stub-reject's own *unchanged*, explicitly [<reject>]-
-            # marked text as {'action': 'accept'} on that round alone —
-            # purely because the numbers now matched, not because anything
-            # stub-reject said changed. Anchoring stub-accept's text to its
-            # real number (30) on every turn removes the empty slot the
-            # interpreter was filling in by invention, so PROPOSE turns stay
-            # pinned at 30 and never drift toward 90 by coincidence.
-            StubAgent(
-                self.room, "stub-accept", action="reject", cli=cli,
-                action_fn=_accept_only_30,
-                prose="I can only agree to 30 days; anything longer does not meet my requirements.",
-            ),
-            # A generic reject reply (the default "This does not meet my
-            # requirements.") carries no number, so the mediator's NLU can
-            # come back "unreadable" on it and fall back to a *wrong* held
-            # value instead of stub-reject's actual position. Restating the
-            # number every round (same pattern CounterOfferChain below
-            # already uses via prose=) keeps every reply machine-parseable
-            # as an actual reject-at-90, not a guess.
-            StubAgent(
-                self.room, "stub-reject", action="reject", cli=cli,
-                prose="I require 90-day retention and reject any shorter window.",
-            ),
-        ]
-        # A genuine stalemate (neither side's number ever satisfies the
-        # other) has to run all the way to the aligner's own step cap
-        # (ALIGNER_MEDIATOR_MAX_STEPS=20) before it gives up and emits
-        # rejected — there's no other way to reach a real rejected terminal
-        # here, by design. The mediator's own round_n only advances once per
-        # SAO step, and each step costs a real LLM call (broker + interpret,
-        # a Pi-agent session) on top of the raw stub await/reply — measured
-        # ~4 raw stub turns per round_n step. 20 steps needs roughly 80 raw
-        # turns; at the observed ~7-9s per raw turn that is ~600s wall clock,
-        # and the stub threads themselves must stay alive that whole time
-        # (their own max_rounds — not just the total_timeout — bounds how
-        # long they keep answering). The shared module-level
-        # _MAX_ROUNDS=20 (40 raw turns) starves the mediator of replies well
-        # before its step cap, so this test needs its own larger budget on
-        # both axes, not just a longer timeout.
-        _REJECTION_MAX_ROUNDS = 45
-        _REJECTION_TOTAL_TIMEOUT = 660
+    def best_found_stands_when_the_fixes_run_out(self, api: MyceliumAPI, cli: MyceliumCLI):
         run_result = run_stubs_until_terminal(
-            api, stubs, setup=self.coord,
-            max_rounds=_REJECTION_MAX_ROUNDS, turn_timeout=_TURN_TIMEOUT,
-            join_wait=_JOIN_WAIT, total_timeout=_REJECTION_TOTAL_TIMEOUT,
+            api, _stubs(self.room, cli, self.cast), setup=self.coord, ask=_ASK,
+            fixes=self._FIXES,
+            max_rounds=_MAX_ROUNDS, turn_timeout=_TURN_TIMEOUT,
+            join_wait=_JOIN_WAIT, total_timeout=self._TOTAL_TIMEOUT,
         )
-        if run_result.timed_out:
-            self.failed(
-                f"TIMEOUT: permanent rejecter did not cause terminal state "
-                f"within {_REJECTION_TOTAL_TIMEOUT}s — check aligner round budget"
-            )
-        assert run_result.terminal is not None, "Expected a terminal state"
-        assert not run_result.converged, (
-            f"Expected rejection (stub-reject never accepts), but converged. "
-            f"subkind={run_result.terminal.get('subkind')!r}"
+        if run_result.timed_out or run_result.terminal is None:
+            debug = collect_debug_info(api, self.room, list(self.cast), self.coord.episode)
+            self.failed(f"TIMEOUT: stalemate did not end within {self._TOTAL_TIMEOUT}s. debug={debug}")
+        # concord ends a stalemate `resolved`, not `rejected`: once the fixes
+        # are used up the best option found stands, below the bar for someone.
+        # `rejected` is for a run with nothing to pick from.
+        assert run_result.subkind == SUBKIND_RESOLVED, (
+            f"Expected resolved (the fixes run out), got subkind={run_result.subkind!r}"
         )
-        # Scoped to stub-reject specifically, not both stubs: once the rejecter's
-        # own reject lands and the session terminates, stub-accept's in-flight
-        # await can legitimately come back SILENT on the losing side of that
-        # exact race (its poll timing out right around termination) without
-        # that meaning anything about *why* the session ended. A silent
-        # stub-reject on *every* turn would mean "rejected" was reached via
-        # silence rather than an actual reject response, which is the thing
-        # this test exists to rule out — but a real stalemate genuinely rides
-        # to the mediator's step cap (pattern: see _REJECTION_TOTAL_TIMEOUT
-        # above), and every round after the cap is hit and the episode closes
-        # is *expected* to come back silent (no more ticks are ever coming).
-        # So the check is "at least one real reject", not "zero silent ones".
-        reject_turns = [t for t in run_result.turns if t.handle == "stub-reject"]
-        real_reject_turns = [t for t in reject_turns if t.ok]
-        assert reject_turns and real_reject_turns, (
-            f"Expected stub-reject to have actually responded at least once "
-            f"(not gone silent every round) — "
-            f"turns={[(t.handle, t.ok, t.round_num) for t in run_result.turns]}"
+        lowest = run_result.terminal.get("min_satisfaction")
+        assert lowest is not None and lowest < DEFAULT_BAR, (
+            f"resolved with min_satisfaction={lowest!r}: someone should be short of the bar"
+        )
+        # The stalemate has to come from stub-reject's ratings and fixes, not
+        # from it going quiet: a silent rater also ends a run `resolved`.
+        assert _answered(run_result, "stub-reject", "repair"), (
+            f"Expected stub-reject to have been asked for a fix and answered it — "
+            f"turns={[(t.handle, t.step, t.ok) for t in run_result.turns]}"
         )
         log.info(
-            "Rejection path terminal: subkind=%s converged=%s",
-            run_result.terminal.get("subkind"), run_result.converged,
+            "Stalemate terminal: subkind=%s min_satisfaction=%s memory=%s",
+            run_result.subkind, lowest, run_result.terminal.get("memory"),
         )
 
     @aetest.cleanup
@@ -270,7 +189,7 @@ class TwoStubRejectionPath(aetest.Testcase):
 
 
 class CounterOfferChain(aetest.Testcase):
-    """003 — Stub B counters first N rounds then accepts → eventual convergence."""
+    """003 — The first pick leaves stub-proposer short; its fix converges."""
 
     uid = "nightly_003"
 
@@ -279,39 +198,31 @@ class CounterOfferChain(aetest.Testcase):
         self.room = _fresh_room()
         testscript.parameters.setdefault("owned_rooms", set()).add(self.room)
         api.create_room(self.room, description="Nightly counter-offer chain")
-        self.coord = setup_coordination(
-            api, cli, self.room,
-            agent_handles=["stub-proposer", "stub-counter"],
-            opening_positions={
-                "stub-proposer": _POS_A,
-                "stub-counter": _POS_COUNTER,
-            },
-        )
+        self.cast = personas.counter()
+        self.coord = setup_coordination(api, cli, self.room, list(self.cast), title=_TITLE)
         if self.coord is None:
             self.failed("coordination setup failed")
 
     @aetest.test
-    def counter_then_accept_terminates(self, api: MyceliumAPI, cli: MyceliumCLI):
-        counter_rounds = 2
-
-        def counter_fn(round_num: int, turn_json: dict):
-            return "counter" if round_num < counter_rounds else "accept"
-
-        stubs = [
-            StubAgent(self.room, "stub-proposer", action="accept", cli=cli),
-            StubAgent(self.room, "stub-counter", action="accept", cli=cli,
-                      action_fn=counter_fn,
-                      prose=_POS_COUNTER),
-        ]
+    def fix_then_converge(self, api: MyceliumAPI, cli: MyceliumCLI):
         run_result = run_stubs_until_terminal(
-            api, stubs, setup=self.coord,
+            api, _stubs(self.room, cli, self.cast), setup=self.coord, ask=_ASK,
             max_rounds=_MAX_ROUNDS, turn_timeout=_TURN_TIMEOUT,
-            join_wait=_JOIN_WAIT, total_timeout=_STUB_TOTAL_TIMEOUT,
+            join_wait=_JOIN_WAIT, total_timeout=_COUNTER_TOTAL_TIMEOUT,
         )
-        if run_result.timed_out:
-            self.failed(f"TIMEOUT: counter-then-accept did not terminate in {_STUB_TOTAL_TIMEOUT}s")
-        assert run_result.terminal is not None
-        log.info("Counter-offer chain terminal: subkind=%s", run_result.terminal.get("subkind"))
+        if run_result.timed_out or run_result.terminal is None:
+            self.failed(f"TIMEOUT: counter-offer chain did not end in {_COUNTER_TOTAL_TIMEOUT}s")
+        assert run_result.subkind == SUBKIND_CONVERGED, (
+            f"Expected converged after one fix, got subkind={run_result.subkind!r}"
+        )
+        assert _answered(run_result, "stub-proposer", "repair"), (
+            f"Expected stub-proposer to have been asked for a fix — "
+            f"turns={[(t.handle, t.step, t.ok) for t in run_result.turns]}"
+        )
+        log.info(
+            "Counter-offer chain terminal: subkind=%s min_satisfaction=%s",
+            run_result.subkind, run_result.terminal.get("min_satisfaction"),
+        )
 
     @aetest.cleanup
     def teardown(self, api: MyceliumAPI):
@@ -411,25 +322,20 @@ class MultiSessionResponseRate(aetest.Testcase):
 
         for session_num in range(self._N_SESSIONS):
             log.info("Starting session %d/%d", session_num + 1, self._N_SESSIONS)
+            # Each session is its own task, and so its own thread and run: the
+            # room's earlier commits are in other threads and never answer for it.
+            cast = personas.happy()
             coord = setup_coordination(
-                api, cli, self.room,
-                agent_handles=["stub-a", "stub-b"],
-                opening_positions={
-                    "stub-a": f"Session {session_num + 1}: {_POS_A}",
-                    "stub-b": f"Session {session_num + 1}: {_POS_B}",
-                },
+                api, cli, self.room, list(cast),
+                title=f"{_TITLE}, session {session_num + 1}",
             )
             if coord is None:
                 self.failed(f"coordination setup failed for session {session_num + 1}")
 
-            stubs = [
-                StubAgent(self.room, "stub-a", action="accept", cli=cli),
-                StubAgent(self.room, "stub-b", action="accept", cli=cli),
-            ]
             run_result = run_stubs_until_terminal(
-                api, stubs, setup=coord,
+                api, _stubs(self.room, cli, cast), setup=coord, ask=_ASK,
                 max_rounds=_MAX_ROUNDS, turn_timeout=_TURN_TIMEOUT,
-                join_wait=_JOIN_WAIT, total_timeout=_STUB_TOTAL_TIMEOUT,
+                join_wait=_JOIN_WAIT, total_timeout=_HAPPY_TOTAL_TIMEOUT,
             )
 
             for turn in run_result.turns:
@@ -444,6 +350,8 @@ class MultiSessionResponseRate(aetest.Testcase):
 
             if run_result.timed_out:
                 log.warning("Session %d timed out", session_num + 1)
+            else:
+                log.info("Session %d: subkind=%s", session_num + 1, run_result.subkind)
 
         if total_turns == 0:
             self.failed("No turns recorded across any session")
